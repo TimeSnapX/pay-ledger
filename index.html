@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pay Ledger · hours, payslips, income</title>
+    <meta
+      name="description"
+      content="Log hours, keep payslips, and track income over time. Stored only in this browser."
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="css/app.css" />
+  </head>
+  <body>
+    <div class="glow glow-a" aria-hidden="true"></div>
+    <div class="glow glow-b" aria-hidden="true"></div>
+
+    <div class="shell">
+      <header class="top">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">Local record · this browser only</p>
+            <h1>Pay Ledger</h1>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="btn" type="button" data-open="payslip">Add payslip</button>
+          <button class="btn primary" type="button" data-open="shift">Log hours</button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Sections">
+        <button class="tab" type="button" data-view="overview" aria-selected="true">Overview</button>
+        <button class="tab" type="button" data-view="hours" aria-selected="false">Hours</button>
+        <button class="tab" type="button" data-view="payslips" aria-selected="false">Payslips</button>
+        <button class="tab" type="button" data-view="jobs" aria-selected="false">Jobs</button>
+      </nav>
+
+      <main>
+        <section id="view-overview" class="view"></section>
+        <section id="view-hours" class="view" hidden></section>
+        <section id="view-payslips" class="view" hidden></section>
+        <section id="view-jobs" class="view" hidden></section>
+      </main>
+    </div>
+
+    <footer>
+      <p>
+        Hours give you gross as you go, with 1.5× after 8 paid hours and 2× after 10.
+        Payslips are the take-home record. Files stay on this device.
+      </p>
+    </footer>
+
+    <dialog id="dlg-shift" aria-labelledby="shift-title">
+      <form class="dlg" id="shift-form">
+        <header>
+          <div>
+            <p class="eyebrow" id="shift-kicker">New shift</p>
+            <h2 id="shift-title">Log hours</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close value="cancel">Close</button>
+        </header>
+        <input type="hidden" id="shift-id" />
+        <div class="form-grid">
+          <label class="field">
+            Job
+            <select id="shift-job" required></select>
+          </label>
+          <label class="field">
+            Date
+            <input id="shift-date" type="date" required />
+          </label>
+          <div class="full">
+            <p class="muted" style="margin-bottom: 8px">How long were you there?</p>
+            <div class="pills" role="group" aria-label="Time entry mode">
+              <button class="pill" type="button" data-mode="duration" aria-pressed="true">Duration</button>
+              <button class="pill" type="button" data-mode="clock" aria-pressed="false">Clock times</button>
+            </div>
+          </div>
+          <div id="duration-fields" class="full">
+            <label class="field">
+              Time on site (clock-in to clock-out)
+              <div class="hm">
+                <input id="shift-h" type="number" min="0" max="24" step="1" value="0" />
+                <span>h</span>
+                <input id="shift-m" type="number" min="0" max="59" step="1" value="0" />
+                <span>m</span>
+              </div>
+            </label>
+          </div>
+          <div id="clock-fields" class="full" hidden>
+            <div class="form-grid">
+              <label class="field">
+                Start
+                <input id="shift-start" type="time" />
+              </label>
+              <label class="field">
+                End
+                <input id="shift-end" type="time" />
+              </label>
+            </div>
+          </div>
+          <label class="field">
+            Unpaid break (minutes)
+            <input id="shift-break" type="number" min="0" max="240" step="5" value="30" />
+          </label>
+          <label class="field">
+            Hourly rate
+            <input id="shift-rate" type="number" min="0" step="0.01" />
+          </label>
+          <div class="preview">
+            <div>
+              <small>Paid hours</small>
+              <div class="preview-value" id="shift-paid">0h</div>
+            </div>
+            <div style="text-align: right">
+              <small>Gross with OT</small>
+              <div class="preview-value" id="shift-gross">$0.00</div>
+            </div>
+            <p class="preview-note" id="shift-ot-note">Ordinary to 8h, then 1.5× to 10h, then 2×.</p>
+          </div>
+          <label class="field full">
+            Notes
+            <textarea id="shift-notes" placeholder="Run, depot, anything you want on the record"></textarea>
+          </label>
+        </div>
+        <div class="dlg-actions">
+          <button class="btn danger" type="button" id="shift-delete" hidden>Delete</button>
+          <div class="right">
+            <button class="btn" type="button" data-close>Cancel</button>
+            <button class="btn primary" type="submit">Save shift</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-payslip" aria-labelledby="slip-title">
+      <form class="dlg" id="payslip-form">
+        <header>
+          <div>
+            <p class="eyebrow" id="slip-kicker">Payslip vault</p>
+            <h2 id="slip-title">Add payslip</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close value="cancel">Close</button>
+        </header>
+        <input type="hidden" id="slip-id" />
+        <div class="form-grid">
+          <label class="field">
+            Job
+            <select id="slip-job" required></select>
+          </label>
+          <label class="field">
+            Pay date
+            <input id="slip-paydate" type="date" required />
+          </label>
+          <label class="field">
+            Period start
+            <input id="slip-start" type="date" />
+          </label>
+          <label class="field">
+            Period end
+            <input id="slip-end" type="date" />
+          </label>
+          <label class="field">
+            Gross
+            <input id="slip-gross" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field">
+            Tax withheld
+            <input id="slip-tax" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field">
+            Take-home (net)
+            <input id="slip-net" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field">
+            Super
+            <input id="slip-super" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field full drop" id="drop-zone">
+            <input id="slip-file" type="file" accept="application/pdf,image/*" />
+            <strong id="drop-label">Drop a PDF or photo of the payslip</strong>
+            <span>or tap to choose a file. Stored only on this device.</span>
+          </label>
+          <label class="field full">
+            Notes
+            <textarea id="slip-notes" placeholder="Pay cycle, missing hours, anything to remember"></textarea>
+          </label>
+        </div>
+        <div class="dlg-actions">
+          <button class="btn danger" type="button" id="slip-delete" hidden>Delete</button>
+          <div class="right">
+            <button class="btn" type="button" id="slip-view" hidden>View file</button>
+            <button class="btn" type="button" data-close>Cancel</button>
+            <button class="btn primary" type="submit">Save payslip</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-job" aria-labelledby="job-title">
+      <form class="dlg" id="job-form">
+        <header>
+          <div>
+            <p class="eyebrow">Employer</p>
+            <h2 id="job-title">Job</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close>Close</button>
+        </header>
+        <input type="hidden" id="job-id" />
+        <div class="form-grid">
+          <label class="field full">
+            Name
+            <input id="job-name" type="text" required placeholder="Job 1" />
+          </label>
+          <label class="field">
+            Hourly rate
+            <input id="job-rate" type="number" min="0" step="0.01" required />
+          </label>
+          <label class="field">
+            Default unpaid break (min)
+            <input id="job-break" type="number" min="0" step="5" />
+          </label>
+          <label class="field">
+            Colour
+            <input id="job-color" type="color" value="#e2a336" />
+          </label>
+          <p class="muted full">Overtime is automatic: 1.5× after 8 paid hours, 2× after 10.</p>
+        </div>
+        <div class="dlg-actions">
+          <button class="btn danger" type="button" id="job-delete" hidden>Delete</button>
+          <div class="right">
+            <button class="btn" type="button" data-close>Cancel</button>
+            <button class="btn primary" type="submit">Save job</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="dlg-viewer" class="wide" aria-label="Payslip file">
+      <div class="dlg" style="padding-bottom: 8px">
+        <header>
+          <div>
+            <p class="eyebrow">Stored file</p>
+            <h2 id="viewer-title">Payslip</h2>
+          </div>
+          <div class="top-actions">
+            <a class="btn" id="viewer-download" download>Download</a>
+            <button class="btn ghost" type="button" data-close>Close</button>
+          </div>
+        </header>
+      </div>
+      <div id="viewer-body"></div>
+    </dialog>
+
+    <dialog id="dlg-confirm" aria-labelledby="confirm-title">
+      <form class="dlg" method="dialog">
+        <header>
+          <div>
+            <p class="eyebrow">Please confirm</p>
+            <h2 id="confirm-title">Delete?</h2>
+          </div>
+        </header>
+        <p class="muted" id="confirm-body"></p>
+        <div class="dlg-actions">
+          <div class="right">
+            <button class="btn" value="cancel">Cancel</button>
+            <button class="btn danger" value="ok">Delete</button>
+          </div>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" hidden role="status"></div>
+
+    <script type="module" src="js/app.js"></script>
+  </body>
+</html>

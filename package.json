@@ -1,0 +1,11 @@
+{
+  "name": "pay-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Log hours, store payslips, and track income over time.",
+  "scripts": {
+    "start": "python -m http.server 4174",
+    "test": "node test-money.js"
+  }
+}
