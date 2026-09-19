@@ -139,7 +139,29 @@ export function paidHours(timeOnSite, breakMins) {
   return roundCents(Math.max(0, paid));
 }
 
-/** Daily bands: ordinary to 8h, 1.5× from 8–10h, 2× after 10h. */
+export const WEEKEND_MIN_HOURS = 4;
+
+export const DAY_TYPES = [
+  { id: "weekday", label: "Weekday", hint: "Mon–Fri" },
+  { id: "sat-ot", label: "Saturday overtime", hint: "BevChain / Road Transport" },
+  { id: "sat-ordinary", label: "Saturday ordinary", hint: "Rostered Saturday" },
+  { id: "sunday", label: "Sunday", hint: "All hours 2×" },
+];
+
+export function dayTypeMeta(id) {
+  return DAY_TYPES.find((t) => t.id === id) || DAY_TYPES[0];
+}
+
+export function suggestDayType(iso) {
+  const d = parseISODate(iso);
+  if (!d) return "weekday";
+  const day = d.getDay();
+  if (day === 0) return "sunday";
+  if (day === 6) return "sat-ot";
+  return "weekday";
+}
+
+/** Weekday bands: ordinary to 8h, 1.5× from 8–10h, 2× after 10h. */
 export function splitOt(paid) {
   const p = Math.max(0, Number(paid) || 0);
   return {
@@ -149,19 +171,77 @@ export function splitOt(paid) {
   };
 }
 
-export function computeGross(paid, rate) {
+export function shiftPay(timeOnSite, breakMins, rate, dayType = "weekday") {
   const r = Number(rate) || 0;
-  const { ordinary, timeAndHalf, double } = splitOt(paid);
-  return roundCents(ordinary * r + timeAndHalf * r * 1.5 + double * r * 2);
+  const worked = roundCents(Math.max(0, Number(timeOnSite) || 0));
+  const afterBreak = paidHours(worked, breakMins);
+  const type = DAY_TYPES.some((t) => t.id === dayType) ? dayType : "weekday";
+
+  let paid = afterBreak;
+  let ordinary = 0;
+  let timeAndHalf = 0;
+  let double = 0;
+  let minApplied = false;
+
+  if (afterBreak <= 0) {
+    paid = 0;
+  } else if (type === "weekday") {
+    const split = splitOt(afterBreak);
+    ordinary = split.ordinary;
+    timeAndHalf = split.timeAndHalf;
+    double = split.double;
+  } else if (type === "sat-ot") {
+    if (afterBreak < WEEKEND_MIN_HOURS) {
+      paid = WEEKEND_MIN_HOURS;
+      minApplied = true;
+      timeAndHalf = 2;
+      double = 2;
+    } else {
+      timeAndHalf = roundCents(Math.min(2, afterBreak));
+      double = roundCents(Math.max(0, afterBreak - 2));
+    }
+  } else if (type === "sat-ordinary") {
+    if (afterBreak < WEEKEND_MIN_HOURS) {
+      paid = WEEKEND_MIN_HOURS;
+      minApplied = true;
+    }
+    timeAndHalf = paid;
+  } else if (type === "sunday") {
+    if (afterBreak < WEEKEND_MIN_HOURS) {
+      paid = WEEKEND_MIN_HOURS;
+      minApplied = true;
+    }
+    double = paid;
+  }
+
+  const estGross = roundCents(ordinary * r + timeAndHalf * r * 1.5 + double * r * 2);
+  return {
+    dayType: type,
+    worked,
+    afterBreak,
+    paidHours: paid,
+    ordinary,
+    timeAndHalf,
+    double,
+    estGross,
+    minApplied,
+  };
 }
 
-export function formatOtLabel(paid) {
-  const { ordinary, timeAndHalf, double } = splitOt(paid);
+export function computeGross(hours, rate, dayType = "weekday") {
+  return shiftPay(hours, 0, rate, dayType).estGross;
+}
+
+export function formatSplit(parts) {
   const bits = [];
-  if (ordinary) bits.push(`${formatHours(ordinary)} @ 1×`);
-  if (timeAndHalf) bits.push(`${formatHours(timeAndHalf)} @ 1.5×`);
-  if (double) bits.push(`${formatHours(double)} @ 2×`);
+  if (parts.ordinary) bits.push(`${formatHours(parts.ordinary)} @ 1×`);
+  if (parts.timeAndHalf) bits.push(`${formatHours(parts.timeAndHalf)} @ 1.5×`);
+  if (parts.double) bits.push(`${formatHours(parts.double)} @ 2×`);
   return bits.join(" · ") || "—";
+}
+
+export function formatOtLabel(paid, dayType = "weekday") {
+  return formatSplit(shiftPay(paid, 0, 0, dayType));
 }
 
 export function inRange(iso, start, end) {
@@ -186,7 +266,7 @@ export function groupWeeks(shifts, count = 12, endDate = new Date()) {
       end: stopISO,
       label: start.toLocaleDateString("en-AU", { day: "numeric", month: "short" }),
       hours: sumBy(rows, (s) => s.paidHours),
-      gross: sumBy(rows, (s) => s.gross),
+      gross: sumBy(rows, (s) => s.estGross ?? s.gross),
       days: rows.length,
     });
   }
@@ -203,14 +283,18 @@ export function groupMonths(shifts, payslips, count = 6, endDate = new Date()) {
     const stopISO = toISODate(stop);
     const shiftRows = shifts.filter((s) => s.date >= startISO && s.date <= stopISO);
     const slipRows = payslips.filter((p) => p.payDate >= startISO && p.payDate <= stopISO);
+    const estGross = sumBy(shiftRows, (s) => s.estGross ?? s.gross);
+    const slipGross = sumBy(slipRows, (p) => p.gross);
+    const slipNet = sumBy(slipRows, (p) => p.net);
     months.push({
       start: startISO,
       end: stopISO,
       label: start.toLocaleDateString("en-AU", { month: "short" }),
       hours: sumBy(shiftRows, (s) => s.paidHours),
-      gross: sumBy(shiftRows, (s) => s.gross),
-      slipGross: sumBy(slipRows, (p) => p.gross),
-      slipNet: sumBy(slipRows, (p) => p.net),
+      gross: estGross,
+      slipGross,
+      slipNet,
+      income: slipRows.length ? slipNet : estGross,
     });
   }
   return months;

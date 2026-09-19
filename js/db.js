@@ -1,4 +1,4 @@
-import { computeGross, splitOt } from "./money.js";
+import { shiftPay, suggestDayType } from "./money.js";
 
 const DB_NAME = "pay-ledger";
 const DB_VERSION = 1;
@@ -205,6 +205,7 @@ export function shiftsToCsv(shifts, jobs) {
   const header = [
     "date",
     "job",
+    "day_type",
     "time_on_site_hours",
     "unpaid_break_mins",
     "paid_hours",
@@ -212,7 +213,9 @@ export function shiftsToCsv(shifts, jobs) {
     "time_and_half_hours",
     "double_hours",
     "rate",
-    "gross",
+    "est_gross",
+    "actual_gross",
+    "actual_net",
     "start",
     "end",
     "notes",
@@ -220,18 +223,21 @@ export function shiftsToCsv(shifts, jobs) {
   const lines = [header.join(",")];
   const sorted = [...shifts].sort((a, b) => a.date.localeCompare(b.date));
   for (const s of sorted) {
-    const ot = splitOt(s.paidHours);
+    const calc = shiftPay(s.workedHours, s.breakMins, s.rate, s.dayType || suggestDayType(s.date));
     const cells = [
       s.date,
       csvCell(jobName(s.jobId)),
+      calc.dayType,
       s.workedHours,
       s.breakMins,
-      s.paidHours,
-      ot.ordinary,
-      ot.timeAndHalf,
-      ot.double,
+      calc.paidHours,
+      calc.ordinary,
+      calc.timeAndHalf,
+      calc.double,
       s.rate,
-      computeGross(s.paidHours, s.rate),
+      calc.estGross,
+      s.actualGross ?? "",
+      s.actualNet ?? "",
       s.start || "",
       s.end || "",
       csvCell(s.notes || ""),

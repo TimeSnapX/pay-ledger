@@ -368,7 +368,7 @@ input.filter {
 table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 720px;
+  min-width: 860px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -547,6 +547,16 @@ input[type="color"] {
 .pills {
   display: flex;
   gap: 6px;
+}
+.pills.wrap { flex-wrap: wrap; }
+
+.helper {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .pill {

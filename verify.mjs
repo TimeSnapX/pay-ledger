@@ -42,6 +42,8 @@ async function runDesktop() {
 
   await page.click('[data-open="shift"]');
   await page.waitForSelector("#dlg-shift[open]");
+  await page.fill("#shift-date", "2026-09-17");
+  await page.click('[data-day-type="weekday"]');
   await page.fill("#shift-h", "11");
   await page.fill("#shift-m", "45");
   await page.fill("#shift-break", "30");
@@ -55,6 +57,35 @@ async function runDesktop() {
     errors.push("ot note: " + otNote);
   }
   await shot(page, "02-log-hours-dialog");
+
+  await page.fill("#shift-date", "2026-09-19");
+  await page.click('[data-day-type="sat-ot"]');
+  await page.fill("#shift-h", "2");
+  await page.fill("#shift-m", "0");
+  await page.waitForFunction(() => document.querySelector("#shift-gross")?.textContent.includes("288.47"));
+  const satGross = await page.locator("#shift-gross").innerText();
+  const satPaid = await page.locator("#shift-paid").innerText();
+  if (!satGross.includes("288.47")) errors.push("sat OT 2h gross: " + satGross);
+  if (satPaid !== "4h") errors.push("sat OT 2h paid: " + satPaid);
+  const satNote = await page.locator("#shift-ot-note").innerText();
+  if (!/2h @ 1.5×/.test(satNote) || !/2h @ 2×/.test(satNote)) errors.push("sat OT split: " + satNote);
+  await shot(page, "02b-sat-ot");
+
+  await page.fill("#shift-date", "2026-09-20");
+  await page.click('[data-day-type="sunday"]');
+  await page.waitForFunction(() => document.querySelector("#shift-gross")?.textContent.includes("329.68"));
+  const sunGross = await page.locator("#shift-gross").innerText();
+  const sunPaid = await page.locator("#shift-paid").innerText();
+  if (!sunGross.includes("329.68")) errors.push("sunday 2h gross: " + sunGross);
+  if (sunPaid !== "4h") errors.push("sunday 2h paid: " + sunPaid);
+  const sunNote = await page.locator("#shift-ot-note").innerText();
+  if (!/4h @ 2×/.test(sunNote) || /1.5×/.test(sunNote)) errors.push("sunday split: " + sunNote);
+  await shot(page, "02c-sunday");
+
+  await page.click('[data-day-type="weekday"]');
+  await page.fill("#shift-h", "11");
+  await page.fill("#shift-m", "45");
+  await page.waitForFunction(() => document.querySelector("#shift-gross")?.textContent.includes("556.34"));
   await page.click('#shift-form button[type="submit"]');
   await page.waitForSelector(".toast:not([hidden])");
   await page.waitForSelector(".stat-value");
@@ -71,9 +102,11 @@ async function runDesktop() {
 
   await page.click('[data-open="payslip"]');
   await page.waitForSelector("#dlg-payslip[open]");
+  await page.fill("#slip-net", "1842.55");
   await page.fill("#slip-gross", "2318.06");
   await page.fill("#slip-tax", "559.47");
-  await page.waitForFunction(() => document.querySelector("#slip-net")?.value === "1758.59");
+  const netVal = await page.locator("#slip-net").inputValue();
+  if (netVal !== "1842.55") errors.push("net overwritten by calculator: " + netVal);
   await page.setInputFiles("#slip-file", {
     name: "week-ending-payslip.pdf",
     mimeType: "application/pdf",
@@ -85,9 +118,10 @@ async function runDesktop() {
   await page.click('.tab[data-view="payslips"]');
   await page.waitForSelector(".slip");
   const slipText = await page.locator(".slip").innerText();
-  if (!/\$1,758.59/.test(slipText) && !/\$1758.59/.test(slipText)) {
+  if (!/\$1,842.55/.test(slipText) && !/\$1842.55/.test(slipText)) {
     errors.push("payslip card: " + slipText);
   }
+  if (!/actual gross/i.test(slipText)) errors.push("payslip missing actual gross: " + slipText);
   if (!/File stored/i.test(slipText)) errors.push("file chip missing: " + slipText);
   await shot(page, "06-payslips");
 

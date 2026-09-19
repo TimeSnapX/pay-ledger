@@ -53,8 +53,8 @@
 
     <footer>
       <p>
-        Hours give you gross as you go, with 1.5× after 8 paid hours and 2× after 10.
-        Payslips are the take-home record. Files stay on this device.
+        Hours give an estimated gross. Payslips are the source of truth for take-home.
+        Files stay on this device.
       </p>
     </footer>
 
@@ -77,6 +77,18 @@
             Date
             <input id="shift-date" type="date" required />
           </label>
+          <div class="full">
+            <p class="muted" style="margin-bottom: 8px">Day type</p>
+            <div class="pills wrap" role="group" aria-label="Day type">
+              <button class="pill" type="button" data-day-type="weekday" aria-pressed="true">Weekday</button>
+              <button class="pill" type="button" data-day-type="sat-ot" aria-pressed="false">Saturday overtime</button>
+              <button class="pill" type="button" data-day-type="sat-ordinary" aria-pressed="false">Saturday ordinary</button>
+              <button class="pill" type="button" data-day-type="sunday" aria-pressed="false">Sunday</button>
+            </div>
+            <p class="helper" id="shift-helper">
+              Sat OT: first 2 hours 1.5×, then 2×. Standalone Sat min 4h = 2 @ 1.5× + 2 @ 2×. Sunday: all hours 2×, min 4h. Do not use weekday 8/10 OT on Sat or Sun.
+            </p>
+          </div>
           <div class="full">
             <p class="muted" style="margin-bottom: 8px">How long were you there?</p>
             <div class="pills" role="group" aria-label="Time entry mode">
@@ -117,15 +129,45 @@
           </label>
           <div class="preview">
             <div>
+              <small>Worked</small>
+              <div class="preview-value" id="shift-worked">0h</div>
+            </div>
+            <div>
               <small>Paid hours</small>
               <div class="preview-value" id="shift-paid">0h</div>
             </div>
             <div style="text-align: right">
-              <small>Gross with OT</small>
+              <small>Est. gross</small>
               <div class="preview-value" id="shift-gross">$0.00</div>
             </div>
-            <p class="preview-note" id="shift-ot-note">Ordinary to 8h, then 1.5× to 10h, then 2×.</p>
+            <p class="preview-note" id="shift-ot-note">1.0× / 1.5× / 2× split</p>
           </div>
+          <p class="helper full">Hours calc is an estimate only. Payslips are the source of truth for take-home.</p>
+          <details class="more full">
+            <summary>Actual pay from the slip (optional)</summary>
+            <div class="form-grid" style="margin-top: 12px">
+              <label class="field">
+                Actual gross
+                <input id="shift-actual-gross" type="number" min="0" step="0.01" placeholder="0.00" />
+              </label>
+              <label class="field">
+                Actual net / take-home
+                <input id="shift-actual-net" type="number" min="0" step="0.01" placeholder="1842.55" />
+              </label>
+              <label class="field">
+                Tax withheld
+                <input id="shift-actual-tax" type="number" min="0" step="0.01" placeholder="0.00" />
+              </label>
+              <label class="field">
+                Super
+                <input id="shift-actual-super" type="number" min="0" step="0.01" placeholder="0.00" />
+              </label>
+              <label class="field full">
+                Other deductions
+                <input id="shift-actual-deductions" type="number" min="0" step="0.01" placeholder="0.00" />
+              </label>
+            </div>
+          </details>
           <label class="field full">
             Notes
             <textarea id="shift-notes" placeholder="Run, depot, anything you want on the record"></textarea>
@@ -169,21 +211,26 @@
             <input id="slip-end" type="date" />
           </label>
           <label class="field">
-            Gross
+            Actual gross
             <input id="slip-gross" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <label class="field">
+            Actual net / take-home
+            <input id="slip-net" type="number" min="0" step="0.01" placeholder="1842.55" required />
           </label>
           <label class="field">
             Tax withheld
             <input id="slip-tax" type="number" min="0" step="0.01" placeholder="0.00" />
           </label>
           <label class="field">
-            Take-home (net)
-            <input id="slip-net" type="number" min="0" step="0.01" placeholder="0.00" />
-          </label>
-          <label class="field">
             Super
             <input id="slip-super" type="number" min="0" step="0.01" placeholder="0.00" />
           </label>
+          <label class="field full">
+            Other deductions
+            <input id="slip-deductions" type="number" min="0" step="0.01" placeholder="0.00" />
+          </label>
+          <p class="helper full">Hours calc is an estimate only. Payslips are the source of truth for take-home. Net is never overwritten by the hours calculator.</p>
           <label class="field full drop" id="drop-zone">
             <input id="slip-file" type="file" accept="application/pdf,image/*" />
             <strong id="drop-label">Drop a PDF or photo of the payslip</strong>
@@ -232,7 +279,7 @@
             Colour
             <input id="job-color" type="color" value="#e2a336" />
           </label>
-          <p class="muted full">Overtime is automatic: 1.5× after 8 paid hours, 2× after 10.</p>
+          <p class="muted full">Weekday: 1.5× after 8 paid hours, 2× after 10. Saturday and Sunday use their own rates — never the weekday 8/10 bands.</p>
         </div>
         <div class="dlg-actions">
           <button class="btn danger" type="button" id="job-delete" hidden>Delete</button>
