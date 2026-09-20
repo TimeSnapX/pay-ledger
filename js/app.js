@@ -1,4 +1,4 @@
-import * as db from "./db.js";
+﻿import * as db from "./db.js";
 import {
   AUD_EXACT,
   DAY_TYPES,
@@ -254,7 +254,7 @@ function renderOverview() {
       <div class="empty">
         <p class="eyebrow">Start the record</p>
         <h2>Log a shift or drop in a payslip</h2>
-        <p>Track hours as you work, keep the PDF on file, and watch take-home from payslips. Default rate is $41.21. Weekday OT is 1.5× after 8h and 2× after 10h. Saturday and Sunday use their own rates.</p>
+        <p>Track hours as you work, keep the PDF on file, and watch take-home from payslips. Default rate is $41.21. Weekday OT is 1.5Ã— after 8h and 2Ã— after 10h. Saturday and Sunday use their own rates.</p>
         <div class="top-actions" style="justify-content:center">
           <button class="btn" type="button" data-open="payslip">Add payslip</button>
           <button class="btn primary" type="button" data-open="shift">Log hours</button>
@@ -272,22 +272,22 @@ function renderOverview() {
       <article class="stat-card">
         <p class="label">${fyLabel(now)} ${fySlips.length ? "actual net" : "est. gross"}</p>
         <p class="stat-value">${AUD_EXACT.format(yearMain)}</p>
-        <p class="sub">${fySlips.length ? "payslip take-home · source of truth" : "no payslip yet · hours estimate"}</p>
+        <p class="sub">${fySlips.length ? "payslip take-home Â· source of truth" : "no payslip yet Â· hours estimate"}</p>
       </article>
       <article class="stat-card">
-        <p class="label">This week · est. gross</p>
+        <p class="label">This week Â· est. gross</p>
         <p class="stat-value">${AUD_EXACT.format(sumBy(week, (s) => s.estGross))}</p>
-        <p class="sub">${formatHours(sumBy(week, (s) => s.paidHours))} paid · ${week.length} shift${week.length === 1 ? "" : "s"}</p>
+        <p class="sub">${formatHours(sumBy(week, (s) => s.paidHours))} paid Â· ${week.length} shift${week.length === 1 ? "" : "s"}</p>
       </article>
       <article class="stat-card">
         <p class="label">${fyLabel(now)} est. gross</p>
         <p class="stat-value">${AUD_EXACT.format(fyEst)}</p>
-        <p class="sub">${formatHours(sumBy(fy, (s) => s.paidHours))} logged · ${fy.length} shift${fy.length === 1 ? "" : "s"}</p>
+        <p class="sub">${formatHours(sumBy(fy, (s) => s.paidHours))} logged Â· ${fy.length} shift${fy.length === 1 ? "" : "s"}</p>
       </article>
       <article class="stat-card">
         <p class="label">${fyLabel(now)} actual gross</p>
         <p class="stat-value">${AUD_EXACT.format(fyActualGross)}</p>
-        <p class="sub">${fySlips.length} slip${fySlips.length === 1 ? "" : "s"} · tax ${AUD_EXACT.format(fyTax)} · super ${AUD_EXACT.format(fySuper)}${fyDed ? ` · other ${AUD_EXACT.format(fyDed)}` : ""}</p>
+        <p class="sub">${fySlips.length} slip${fySlips.length === 1 ? "" : "s"} Â· tax ${AUD_EXACT.format(fyTax)} Â· super ${AUD_EXACT.format(fySuper)}${fyDed ? ` Â· other ${AUD_EXACT.format(fyDed)}` : ""}</p>
       </article>
     </div>
     <div class="charts">
@@ -381,7 +381,7 @@ function shiftRow(s) {
   const day = dayTypeMeta(s.dayType).label;
   const varText =
     s.variance != null
-      ? ` · var ${s.variance >= 0 ? "+" : "−"}${AUD_EXACT.format(Math.abs(s.variance))}`
+      ? ` Â· var ${s.variance >= 0 ? "+" : "âˆ’"}${AUD_EXACT.format(Math.abs(s.variance))}`
       : "";
   const netText = s.actualNet != null ? `<small>net ${AUD_EXACT.format(s.actualNet)}</small>` : `<small>est. gross</small>`;
   return `
@@ -389,7 +389,7 @@ function shiftRow(s) {
       <span class="dot" style="background:${jobColor(s.jobId)}"></span>
       <span>
         <b>${formatDay(s.date)}</b>
-        <small>${escapeHtml(job?.name || "Job")} · ${escapeHtml(day)} · worked ${formatHours(s.afterBreak ?? s.workedHours)} · paid ${formatHours(s.paidHours)} · ${formatSplit({ ordinary: s.ordinaryHours, timeAndHalf: s.timeAndHalfHours, double: s.doubleHours })}${varText}</small>
+        <small>${escapeHtml(job?.name || "Job")} Â· ${escapeHtml(day)} Â· worked ${formatHours(s.afterBreak ?? s.workedHours)} Â· paid ${formatHours(s.paidHours)} Â· ${formatSplit({ ordinary: s.ordinaryHours, timeAndHalf: s.timeAndHalfHours, double: s.doubleHours })}${varText}</small>
       </span>
       <span class="money">${AUD_EXACT.format(s.estGross)}${netText}</span>
     </button>
@@ -403,7 +403,7 @@ function slipRow(p) {
       <span class="dot" style="background:${jobColor(p.jobId)}"></span>
       <span>
         <b>Paid ${formatDayShort(p.payDate)}</b>
-        <small>${escapeHtml(job?.name || "Job")}${p.fileId ? " · file on record" : ""}</small>
+        <small>${escapeHtml(job?.name || "Job")}${p.fileId ? " Â· file on record" : ""}</small>
       </span>
       <span class="money">${AUD_EXACT.format(p.net || 0)}<small>net</small></span>
     </button>
@@ -418,7 +418,7 @@ function renderHours() {
     <div class="toolbar">
       <div>
         <h2 style="font-size:22px;margin:0">Hours</h2>
-        <p class="muted">${rows.length} shift${rows.length === 1 ? "" : "s"} · ${formatHours(totalH)} paid · est. ${AUD_EXACT.format(totalG)}</p>
+        <p class="muted">${rows.length} shift${rows.length === 1 ? "" : "s"} Â· ${formatHours(totalH)} paid Â· est. ${AUD_EXACT.format(totalG)}</p>
       </div>
       ${filterBar()}
     </div>
@@ -432,9 +432,9 @@ function renderHours() {
                 <th>Day</th>
                 <th>Worked</th>
                 <th>Paid</th>
-                <th>1.0×</th>
-                <th>1.5×</th>
-                <th>2×</th>
+                <th>1.0Ã—</th>
+                <th>1.5Ã—</th>
+                <th>2Ã—</th>
                 <th>Est. gross</th>
                 <th>Actual net</th>
                 <th></th>
@@ -447,13 +447,13 @@ function renderHours() {
                     <tr>
                       <td>${formatDay(s.date)}</td>
                       <td>${escapeHtml(dayTypeMeta(s.dayType).label)}</td>
-                      <td>${formatHours(s.afterBreak ?? s.workedHours)}${s.start && s.end ? ` <small class="muted">${s.start}–${s.end}</small>` : ""}</td>
+                      <td>${formatHours(s.afterBreak ?? s.workedHours)}${s.start && s.end ? ` <small class="muted">${s.start}â€“${s.end}</small>` : ""}</td>
                       <td>${formatHours(s.paidHours)}</td>
-                      <td>${s.ordinaryHours ? formatHours(s.ordinaryHours) : "—"}</td>
-                      <td>${s.timeAndHalfHours ? formatHours(s.timeAndHalfHours) : "—"}</td>
-                      <td>${s.doubleHours ? formatHours(s.doubleHours) : "—"}</td>
+                      <td>${s.ordinaryHours ? formatHours(s.ordinaryHours) : "â€”"}</td>
+                      <td>${s.timeAndHalfHours ? formatHours(s.timeAndHalfHours) : "â€”"}</td>
+                      <td>${s.doubleHours ? formatHours(s.doubleHours) : "â€”"}</td>
                       <td>${AUD_EXACT.format(s.estGross)}</td>
-                      <td>${s.actualNet != null ? AUD_EXACT.format(s.actualNet) : "—"}</td>
+                      <td>${s.actualNet != null ? AUD_EXACT.format(s.actualNet) : "â€”"}</td>
                       <td><button class="row-link" type="button" data-edit-shift="${s.id}">Edit</button></td>
                     </tr>
                   `;
@@ -463,7 +463,7 @@ function renderHours() {
           </table></div>`
         : `<div class="empty">
             <h2>No shifts in this filter</h2>
-            <p>Log the hours from today. Pick weekday, Saturday overtime, Saturday ordinary, or Sunday. Est. gross is an estimate — payslips are take-home.</p>
+            <p>Log the hours from today. Pick weekday, Saturday overtime, Saturday ordinary, or Sunday. Est. gross is an estimate â€” payslips are take-home.</p>
             <button class="btn primary" type="button" data-open="shift">Log hours</button>
           </div>`
     }
@@ -490,7 +490,7 @@ function renderPayslips() {
     <div class="toolbar">
       <div>
         <h2 style="font-size:22px;margin:0">Payslips</h2>
-        <p class="muted">${rows.length} on file · take-home ${AUD_EXACT.format(sumBy(rows, (p) => p.net))}</p>
+        <p class="muted">${rows.length} on file Â· take-home ${AUD_EXACT.format(sumBy(rows, (p) => p.net))}</p>
       </div>
       ${filterBar()}
     </div>
@@ -504,22 +504,22 @@ function renderPayslips() {
                 let recHtml = "";
                 if (rec) {
                   if (!rec.days) {
-                    recHtml = `<p class="reconcile">No hours logged in ${formatDayShort(p.periodStart)}–${formatDayShort(p.periodEnd)}</p>`;
+                    recHtml = `<p class="reconcile">No hours logged in ${formatDayShort(p.periodStart)}â€“${formatDayShort(p.periodEnd)}</p>`;
                   } else if (Math.abs(rec.delta) < 0.5) {
                     recHtml = `<p class="reconcile ok">Actual gross matches ${rec.days} shift${rec.days === 1 ? "" : "s"} est. (${formatHours(rec.hours)})</p>`;
                   } else {
-                    recHtml = `<p class="reconcile off">Variance actual − est. ${rec.delta >= 0 ? "+" : "−"}${AUD_EXACT.format(Math.abs(rec.delta))} · est. ${AUD_EXACT.format(rec.logged)}</p>`;
+                    recHtml = `<p class="reconcile off">Variance actual âˆ’ est. ${rec.delta >= 0 ? "+" : "âˆ’"}${AUD_EXACT.format(Math.abs(rec.delta))} Â· est. ${AUD_EXACT.format(rec.logged)}</p>`;
                   }
                 }
-                const period = p.periodStart && p.periodEnd ? `${formatDayShort(p.periodStart)} – ${formatDayShort(p.periodEnd)}` : "Period not set";
+                const period = p.periodStart && p.periodEnd ? `${formatDayShort(p.periodStart)} â€“ ${formatDayShort(p.periodEnd)}` : "Period not set";
                 return `
                   <button class="panel slip" type="button" data-edit-slip="${p.id}">
                     <p class="eyebrow">${escapeHtml(job?.name || "Job")}</p>
                     <h3>Paid ${formatDay(p.payDate)}</h3>
                     <p class="muted">${period}</p>
                     <p class="stat-value" style="font-size:28px">${AUD_EXACT.format(p.net || 0)}</p>
-                    <p class="muted">actual net · actual gross ${AUD_EXACT.format(p.gross || 0)}</p>
-                    <p class="muted">tax ${AUD_EXACT.format(p.tax || 0)} · super ${AUD_EXACT.format(p.super || 0)}${p.deductions ? ` · other ${AUD_EXACT.format(p.deductions)}` : ""}</p>
+                    <p class="muted">actual net Â· actual gross ${AUD_EXACT.format(p.gross || 0)}</p>
+                    <p class="muted">tax ${AUD_EXACT.format(p.tax || 0)} Â· super ${AUD_EXACT.format(p.super || 0)}${p.deductions ? ` Â· other ${AUD_EXACT.format(p.deductions)}` : ""}</p>
                     <span class="file-chip ${p.fileId ? "" : "missing"}">${p.fileId ? "PDF / file stored" : "No file attached"}</span>
                     ${recHtml}
                   </button>
@@ -554,7 +554,7 @@ function renderJobs() {
               <span class="dot" style="background:${j.color}"></span>
               <h3 style="margin:10px 0 4px">${escapeHtml(j.name)}</h3>
               <p class="stat-value" style="font-size:28px">${AUD_EXACT.format(j.rate)} <span style="font-size:14px;color:var(--muted);font-family:'IBM Plex Sans',sans-serif;letter-spacing:0;font-weight:500">/hr</span></p>
-              <p class="muted">${j.breakMins} min unpaid break · ${shifts.length} shift${shifts.length === 1 ? "" : "s"}</p>
+              <p class="muted">${j.breakMins} min unpaid break Â· ${shifts.length} shift${shifts.length === 1 ? "" : "s"}</p>
             </button>
           `;
         })
@@ -568,7 +568,7 @@ function renderJobs() {
         <input id="import-json" type="file" accept="application/json" hidden />
       </label>
     </div>
-    <p class="note">Backup includes payslip files. Keep a copy somewhere safe — clearing this browser will wipe the ledger.</p>
+    <p class="note">Backup includes payslip files. Keep a copy somewhere safe â€” clearing this browser will wipe the ledger.</p>
   `;
 }
 
@@ -625,10 +625,10 @@ function updateShiftPreview() {
   document.querySelector("#shift-paid").textContent = formatHours(calc.paidHours);
   document.querySelector("#shift-gross").textContent = AUD_EXACT.format(calc.estGross);
   let note = formatSplit(calc);
-  if (calc.minApplied) note += ` · ${formatHours(calc.paidHours)} minimum applied (worked ${formatHours(calc.afterBreak)})`;
+  if (calc.minApplied) note += ` Â· ${formatHours(calc.paidHours)} minimum applied (worked ${formatHours(calc.afterBreak)})`;
   document.querySelector("#shift-ot-note").textContent = calc.paidHours
     ? note
-    : "1.0× / 1.5× / 2× split";
+    : "1.0Ã— / 1.5Ã— / 2Ã— split";
   return { ...calc, rate, brk };
 }
 
@@ -677,7 +677,7 @@ function openPayslip(slip) {
   state.pendingFile = null;
   state.existingFileName = slip?.fileName || "";
   els.dropLabel.textContent = slip?.fileName
-    ? `On file: ${slip.fileName} — drop to replace`
+    ? `On file: ${slip.fileName} â€” drop to replace`
     : "Drop a PDF or photo of the payslip";
   document.querySelector("#slip-delete").hidden = !slip;
   document.querySelector("#slip-view").hidden = !slip?.fileId;
@@ -701,7 +701,7 @@ async function saveShift(event) {
   event.preventDefault();
   const preview = updateShiftPreview();
   if (preview.paidHours <= 0) {
-    toast("Paid hours came out at zero — check time on site and the break.");
+    toast("Paid hours came out at zero â€” check time on site and the break.");
     return;
   }
   const id = document.querySelector("#shift-id").value || db.uid();
@@ -734,7 +734,7 @@ async function saveShift(event) {
   };
   await db.put("shifts", record);
   els.shiftDlg.close();
-  toast(`Saved ${formatHours(record.paidHours)} · est. ${AUD_EXACT.format(record.estGross)}`);
+  toast(`Saved ${formatHours(record.paidHours)} Â· est. ${AUD_EXACT.format(record.estGross)}`);
   await reload();
 }
 
@@ -823,7 +823,7 @@ async function deleteJob() {
   if (!id) return;
   const used = state.shifts.some((s) => s.jobId === id) || state.payslips.some((p) => p.jobId === id);
   if (used) {
-    toast("Move or delete this job’s shifts and payslips first.");
+    toast("Move or delete this jobâ€™s shifts and payslips first.");
     return;
   }
   if (state.jobs.length === 1) {
@@ -1076,7 +1076,94 @@ window.addEventListener("hashchange", () => {
 const initial = location.hash.replace("#/", "");
 if (["overview", "hours", "payslips", "jobs"].includes(initial)) state.view = initial;
 
-reload().catch((err) => {
+
+async function applyChronaSeed() {
+  const params = new URLSearchParams(location.search);
+  const raw = params.get("chronaAdd");
+  if (!raw) return 0;
+  let payload;
+  try {
+    payload = JSON.parse(decodeURIComponent(raw));
+  } catch (err) {
+    console.error(err);
+    toast("Chrona seed link was invalid.");
+    return 0;
+  }
+  const incoming = Array.isArray(payload?.shifts) ? payload.shifts : [];
+  if (!incoming.length) return 0;
+
+  const jobs = await db.ensureDefaultJob();
+  let job = jobs.find((j) => /bevchain/i.test(j.name)) || jobs[0];
+  if (!job) {
+    job = {
+      id: db.uid(),
+      name: "BevChain",
+      rate: 41.21,
+      breakMins: 30,
+      color: "#e2a336",
+      createdAt: new Date().toISOString(),
+    };
+    await db.put("jobs", job);
+  } else if (job.name === "Job 1") {
+    job = { ...job, name: "BevChain", rate: job.rate || 41.21, breakMins: job.breakMins ?? 30 };
+    await db.put("jobs", job);
+  }
+
+  const existing = await db.all("shifts");
+  let added = 0;
+  for (const row of incoming) {
+    const date = row.date;
+    const workedHours = Number(row.workedHours);
+    const breakMins = Number(row.breakMins ?? 30);
+    const rate = Number(row.rate ?? job.rate ?? 41.21);
+    const dayType = row.dayType || suggestDayType(date);
+    if (!date || !Number.isFinite(workedHours)) continue;
+    const dup = existing.some(
+      (s) => s.date === date && Number(s.workedHours) === workedHours && Number(s.breakMins) === breakMins,
+    );
+    if (dup) continue;
+    const calc = shiftPay(workedHours, breakMins, rate, dayType);
+    const record = {
+      id: db.uid(),
+      jobId: job.id,
+      date,
+      mode: "duration",
+      start: "",
+      end: "",
+      dayType: calc.dayType,
+      breakMins,
+      workedHours,
+      paidHours: calc.paidHours,
+      ordinaryHours: calc.ordinary,
+      timeAndHalfHours: calc.timeAndHalf,
+      doubleHours: calc.double,
+      rate,
+      estGross: calc.estGross,
+      gross: calc.estGross,
+      actualGross: null,
+      actualNet: null,
+      notes: row.note || row.notes || "Chrona",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await db.put("shifts", record);
+    existing.push(record);
+    added += 1;
+  }
+
+  params.delete("chronaAdd");
+  const qs = params.toString();
+  const next = `${location.pathname}${qs ? `?${qs}` : ""}${location.hash || "#/hours"}`;
+  history.replaceState(null, "", next);
+  if (added) toast(`Chrona added ${added} shift${added === 1 ? "" : "s"}`);
+  else toast("Those Chrona shifts were already logged");
+  return added;
+}
+
+reload()
+  .then(() => applyChronaSeed())
+  .then((added) => (added ? reload() : null))
+  .catch((err) => {
   console.error(err);
   toast("Could not open local storage. Try a normal Chrome/Edge window, not file://.");
 });
