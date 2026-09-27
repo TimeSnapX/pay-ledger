@@ -748,3 +748,64 @@ footer {
   }
   .week-col span { font-size: 10px; }
 }
+
+/* ---------- In-app browser banner + Copy / Paste backup ---------- */
+.iab-banner {
+  margin: 0 0 16px;
+  padding: 16px;
+  border: 2px solid var(--amber);
+  border-radius: var(--radius);
+  background: rgba(226, 163, 54, 0.14);
+  color: var(--ink);
+}
+.iab-banner p { margin: 0 0 8px; line-height: 1.45; }
+.iab-title { font-size: 16px; }
+.iab-steps { font-size: 15px; }
+.iab-actions, .transfer-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.iab-actions .btn { flex: 1 1 140px; font-size: 16px; }
+.iab-link { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 8px; }
+.iab-link code, .dlg code {
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.iab-link code { flex: 1 1 200px; }
+.iab-hint { font-size: 13px; color: var(--muted); }
+.iab-banner[hidden] { display: none; }
+
+.dlg-actions .left { display: flex; gap: 8px; flex-wrap: wrap; }
+.dlg-actions .right { flex-wrap: wrap; justify-content: flex-end; }
+.copy-status, .paste-status { font-size: 15px; line-height: 1.5; min-height: 1.5em; margin: 10px 0; }
+.paste-status.error { color: var(--danger); }
+.backup-text {
+  width: 100%;
+  min-height: 38vh;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+  word-break: break-all;
+}
+dialog.full {
+  width: calc(100% - 12px);
+  max-width: none;
+  height: calc(100% - 12px);
+  max-height: none;
+}
+dialog.full .backup-text { min-height: 55vh; }
+#paste-text { font-size: 16px; }
+.empty-transfer {
+  margin: 22px auto 0;
+  padding: 14px;
+  max-width: 460px;
+  border: 1px dashed rgba(226, 163, 54, 0.6);
+  border-radius: 16px;
+}
+.empty-transfer p { margin: 0 0 10px; }

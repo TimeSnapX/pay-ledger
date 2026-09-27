@@ -1,6 +1,6 @@
-import { BEVCHAIN_RULES } from "./money.js?v=2";
-import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=2";
-export { shiftsToCsv } from "./exporters.js?v=2";
+import { BEVCHAIN_RULES } from "./money.js?v=3";
+import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=3";
+export { shiftsToCsv } from "./exporters.js?v=3";
 
 const DB_NAME = "pay-ledger";
 /** IndexedDB version == data schema version. v2: pay rules + meal allowance. */
@@ -206,34 +206,102 @@ export async function exportBackup() {
     shifts,
     payslips,
     files: packedFiles,
-    meta,
+    // The pre-import safety copy stays on this device only (keeps backups small).
+    meta: meta.filter((m) => m.key !== PRE_IMPORT_KEY),
   };
 }
 
-export async function importBackup(payload) {
-  if (!payload || payload.app !== "pay-ledger") {
-    throw new Error("That file is not a Pay Ledger backup.");
+/** meta key holding the ledger as it was just before the last backup import. */
+export const PRE_IMPORT_KEY = "preImportBackup";
+
+function countOf(data) {
+  return {
+    jobs: (data.jobs || []).length,
+    shifts: (data.shifts || []).length,
+    payslips: (data.payslips || []).length,
+    files: (data.files || []).length,
+  };
+}
+
+/**
+ * Validate + migrate a backup without writing anything. Throws on anything
+ * that is not a complete Pay Ledger backup. Returns the records to write and
+ * their counts, so the caller can show them before asking to replace.
+ */
+export function prepareImport(payload) {
+  if (!payload || typeof payload !== "object" || payload.app !== "pay-ledger") {
+    throw new Error("That is not a Pay Ledger backup.");
   }
   // Older backups (v1) are migrated before anything is written.
   const data = migrateDataset(payload);
+  const files = (Array.isArray(payload.files) ? payload.files : []).map((file) => ({
+    id: file.id,
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    uploadedAt: file.uploadedAt,
+    blob: safeBlob(file),
+  }));
+  const meta = data.meta.filter((row) => row.key !== PRE_IMPORT_KEY);
+  const prepared = { jobs: data.jobs, shifts: data.shifts, payslips: data.payslips, meta, files };
+  return { ...prepared, counts: countOf(prepared), exportedAt: payload.exportedAt || null };
+}
+
+function safeBlob(file) {
+  try {
+    return dataUrlToBlob(file?.dataUrl, file?.type);
+  } catch {
+    throw new Error(`The payslip file “${file?.name || "?"}” in the backup is damaged or cut off. Copy the backup again.`);
+  }
+}
+
+/** Counts of what is stored in this browser right now. */
+export async function currentCounts() {
+  const [jobs, shifts, payslips, files] = await Promise.all([all("jobs"), all("shifts"), all("payslips"), all("files")]);
+  return { ...countOf({ jobs, shifts, payslips, files }), jobNames: jobs.map((j) => j.name) };
+}
+
+/**
+ * Replace the whole ledger with a backup, in ONE transaction: either every
+ * record is written or nothing changes. With keepCurrent, the ledger as it
+ * was is saved (as backup JSON text) in meta.preImportBackup in the same
+ * transaction, like the pre-migration copy, so an import can be undone.
+ */
+export async function importBackup(payload, { keepCurrent = false } = {}) {
+  const data = prepareImport(payload);
+  let preImport = null;
+  if (keepCurrent) {
+    const current = await exportBackup();
+    preImport = {
+      key: PRE_IMPORT_KEY,
+      value: { savedAt: new Date().toISOString(), counts: countOf(current), backup: JSON.stringify(current) },
+    };
+  }
   const db = await openDb();
   const tx = db.transaction(STORES, "readwrite");
-  for (const store of STORES) tx.objectStore(store).clear();
-  for (const job of data.jobs) tx.objectStore("jobs").put(job);
-  for (const shift of data.shifts) tx.objectStore("shifts").put(shift);
-  for (const slip of data.payslips) tx.objectStore("payslips").put(slip);
-  for (const row of data.meta) tx.objectStore("meta").put(row);
-  for (const file of payload.files || []) {
-    tx.objectStore("files").put({
-      id: file.id,
-      name: file.name,
-      type: file.type,
-      size: file.size,
-      uploadedAt: file.uploadedAt,
-      blob: dataUrlToBlob(file.dataUrl, file.type),
-    });
+  const done = txDone(tx);
+  try {
+    for (const store of STORES) tx.objectStore(store).clear();
+    for (const job of data.jobs) tx.objectStore("jobs").put(job);
+    for (const shift of data.shifts) tx.objectStore("shifts").put(shift);
+    for (const slip of data.payslips) tx.objectStore("payslips").put(slip);
+    for (const row of data.meta) tx.objectStore("meta").put(row);
+    for (const file of data.files) tx.objectStore("files").put(file);
+    if (preImport) tx.objectStore("meta").put(preImport);
+  } catch (err) {
+    try {
+      tx.abort();
+    } catch {}
+    await done.catch(() => {});
+    throw err;
   }
-  await txDone(tx);
+  await done;
+  return data.counts;
+}
+
+/** The saved pre-import copy, if any: { savedAt, counts, backup (JSON text) }. */
+export async function getPreImportCopy() {
+  return (await get("meta", PRE_IMPORT_KEY))?.value || null;
 }
 
 function blobToDataUrl(blob) {

@@ -7,6 +7,7 @@
   "scripts": {
     "start": "python -m http.server 4174",
     "test": "node check-encoding.mjs && node test-money.js && node test-pay.mjs",
-    "test:e2e": "node tests/e2e.mjs"
+    "test:e2e": "node tests/e2e.mjs",
+    "test:transfer": "node tests/transfer-e2e.mjs"
   }
 }

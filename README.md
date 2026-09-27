@@ -66,6 +66,24 @@ sheet opens and you pick Drive. Nothing is uploaded to the website. Shares:
 If the browser can't share files, the three files are downloaded instead; upload them to a
 "Pay Ledger" folder in Drive.
 
+## Move between browsers (Messenger → Chrome)
+
+Each browser keeps its own copy of the ledger. Links opened from Facebook Messenger, Facebook,
+Instagram, LINE etc. run in that app's in-app browser, which has separate storage, can't share
+files and hides downloads. In an in-app browser a banner at the top says so and offers:
+
+- **Copy backup** — puts the full backup (same JSON as Export backup) on the clipboard. If the
+  clipboard is blocked, the text is shown full-screen, pre-selected, to copy by hand.
+- **Paste backup** — in the other browser: paste (or **Paste from clipboard**) and **Import backup**.
+  Same validation/migration as Import backup, one transaction (all-or-nothing). If this browser
+  already has data it asks first, showing both shift counts, and keeps the old ledger in
+  `meta.preImportBackup` (**Undo last import** on the Jobs tab). That copy is never put into backups.
+- **Copy link** — the page URL, to paste into Chrome.
+
+Copy backup / Paste backup are also on Overview and Jobs in every browser. In an in-app browser
+**Save to Google Drive** offers Copy backup instead of downloading (downloads stay as a secondary
+button).
+
 ## Data and upgrades
 
 Storage is IndexedDB `pay-ledger`, schema **v2**. Opening the new version migrates v1 data in the
@@ -108,6 +126,7 @@ Export a backup first.
 npm test          # encoding guard + pay rules + migration + exports + share logic
 # headless Chrome (390x844): serve this folder at /pay-ledger/ and commit 2cceff3 at /old/ on one origin
 BASE=http://127.0.0.1:4174 PLAYWRIGHT_DIR=<dir with playwright-core> CHROME=/usr/bin/google-chrome npm run test:e2e
+BASE=http://127.0.0.1:4174 PLAYWRIGHT_DIR=<dir with playwright-core> npm run test:transfer   # copy/paste between browsers
 ```
 
 Files are UTF-8 without BOM (`.editorconfig`, `.gitattributes`). On Windows PowerShell 5, don't

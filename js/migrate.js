@@ -17,7 +17,7 @@ import {
   normalizeRules,
   shiftPay,
   suggestDayType,
-} from "./money.js?v=2";
+} from "./money.js?v=3";
 
 export const SCHEMA_VERSION = 2;
 

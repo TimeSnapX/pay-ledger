@@ -1,4 +1,4 @@
-import * as db from "./db.js?v=2";
+import * as db from "./db.js?v=3";
 import {
   AUD_EXACT,
   BEVCHAIN_RULES,
@@ -33,10 +33,14 @@ import {
   todayISO,
   weekEnd,
   weekStart,
-} from "./money.js?v=2";
-import { withPay } from "./migrate.js?v=2";
-import { buildSummaryHtml } from "./exporters.js?v=2";
-import { downloadFile, shareOrDownload } from "./share.js?v=2";
+} from "./money.js?v=3";
+import { withPay } from "./migrate.js?v=3";
+import { buildSummaryHtml } from "./exporters.js?v=3";
+import { downloadFile, pickShareableFiles, shareOrDownload } from "./share.js?v=3";
+import { copyText, detectInAppBrowser, inAppLabel, kb, parseBackupText, plural, readClipboard } from "./transfer.js?v=3";
+
+/** Messenger / Facebook / Instagram etc. open links in their own browser with its own storage. */
+const IAB = detectInAppBrowser();
 
 const state = {
   view: "overview",
@@ -51,6 +55,8 @@ const state = {
   existingFileName: "",
   mealTouched: false,
   driveFiles: null,
+  copyText: "",
+  preImport: null,
 };
 
 const els = {
@@ -65,6 +71,8 @@ const els = {
   viewerDlg: document.querySelector("#dlg-viewer"),
   confirmDlg: document.querySelector("#dlg-confirm"),
   driveDlg: document.querySelector("#dlg-drive"),
+  copyDlg: document.querySelector("#dlg-copy"),
+  pasteDlg: document.querySelector("#dlg-paste"),
   toast: document.querySelector("#toast"),
   drop: document.querySelector("#drop-zone"),
   dropLabel: document.querySelector("#drop-label"),
@@ -167,11 +175,13 @@ async function confirmDelete(title, body, action = "Delete") {
 }
 
 async function reload() {
-  const [jobs, shifts, payslips] = await Promise.all([
+  const [jobs, shifts, payslips, preImport] = await Promise.all([
     db.ensureDefaultJob(),
     db.all("shifts"),
     db.all("payslips"),
+    db.getPreImportCopy().catch(() => null),
   ]);
+  state.preImport = preImport ? { savedAt: preImport.savedAt, counts: preImport.counts } : null;
   state.jobs = jobs.sort((a, b) => a.name.localeCompare(b.name));
   state.shifts = shifts.map(enrichShift).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   state.payslips = payslips.sort((a, b) => b.payDate.localeCompare(a.payDate));
@@ -281,6 +291,10 @@ function renderOverview() {
         <div class="top-actions" style="justify-content:center">
           <button class="btn" type="button" data-open="payslip">Add payslip</button>
           <button class="btn primary" type="button" data-open="shift">Log hours</button>
+        </div>
+        <div class="empty-transfer">
+          <p><b>Already using Pay Ledger in Messenger or another browser?</b> Tap <b>Copy backup</b> there, then tap <b>Paste backup</b> here.</p>
+          <button class="btn primary" type="button" data-paste-backup>Paste backup</button>
         </div>
       </div>
     `;
@@ -415,10 +429,25 @@ function drivePanel() {
         <div>
           <h2>Private copy</h2>
           <p>Saves a private copy to your Drive. Nothing is uploaded to the website.</p>
+          ${
+            state.shifts.length
+              ? ""
+              : `<p class="helper">Moving from Messenger or another browser? Tap <b>Copy backup</b> there, then <b>Paste backup</b> here.</p>`
+          }
         </div>
         <button class="btn drive-btn" type="button" data-drive>Save to Google Drive</button>
       </div>
+      ${transferButtons()}
     </article>
+  `;
+}
+
+function transferButtons() {
+  return `
+    <div class="transfer-tools">
+      <button class="btn" type="button" data-copy-backup>Copy backup</button>
+      <button class="btn" type="button" data-paste-backup>Paste backup</button>
+    </div>
   `;
 }
 
@@ -635,6 +664,8 @@ function renderJobs() {
         </div>
         <button class="btn primary drive-btn" type="button" data-drive>Save to Google Drive</button>
       </div>
+      <p class="helper">Moving between browsers on this phone (e.g. Messenger → Chrome)? <b>Copy backup</b> in one, <b>Paste backup</b> in the other.</p>
+      ${transferButtons()}
     </article>
     <div class="jobs-tools">
       <button class="btn" type="button" id="export-json">Export backup</button>
@@ -644,6 +675,11 @@ function renderJobs() {
         <input id="import-json" type="file" accept="application/json,.json,text/plain,.txt" hidden />
       </label>
     </div>
+    ${
+      state.preImport
+        ? `<p class="note">The ledger from before your last import (${plural(state.preImport.counts?.shifts ?? 0, "shift")}, saved ${escapeHtml(new Date(state.preImport.savedAt).toLocaleString("en-AU"))}) is kept on this phone. <button class="btn" type="button" data-undo-import>Undo last import</button></p>`
+        : ""
+    }
     <p class="note">Backup includes payslip files. Keep a copy somewhere safe — clearing this browser will wipe the ledger.</p>
   `;
 }
@@ -1055,14 +1091,29 @@ function driveFileList(files) {
 const DRIVE_FALLBACK_NOTE =
   "This browser can’t share files, so they were downloaded instead. Open the Google Drive app, make a folder called <b>Pay Ledger</b>, and upload these files into it.";
 
+function driveButtons({ retry = false, copy = false, download = false } = {}) {
+  document.querySelector("#drive-retry").hidden = !retry;
+  document.querySelector("#drive-copy").hidden = !copy;
+  document.querySelector("#drive-download").hidden = !download;
+}
+
+const DRIVE_INAPP_NOTE = () =>
+  `You’re inside ${escapeHtml(inAppLabel(IAB))}. It can’t send files to Google Drive, and downloads from here are hard to find. ` +
+  `Tap <b>Copy backup</b>, open this page in Chrome, tap <b>Paste backup</b>, then tap <b>Save to Google Drive</b> in Chrome.`;
+
 async function saveToDrive() {
   els.driveDlg.showModal();
-  document.querySelector("#drive-retry").hidden = true;
+  driveButtons();
   driveStatus("Preparing your files…");
   driveFileList([]);
   const files = await buildDriveFiles();
   state.driveFiles = files;
   driveFileList(files);
+  if (IAB.inApp && !pickShareableFiles(files)) {
+    // Don't silently download inside an in-app browser: offer the clipboard instead.
+    handleDriveResult({ method: "inapp", files });
+    return;
+  }
   const result = await shareOrDownload(files, {
     title: "Pay Ledger backup",
     text: "Pay Ledger private copy. Save to Google Drive → Pay Ledger folder.",
@@ -1077,12 +1128,20 @@ function handleDriveResult(result) {
     toast("Shared · pick Drive to save");
   } else if (result.method === "cancelled") {
     driveStatus("Share cancelled. Nothing was saved.");
-    document.querySelector("#drive-retry").hidden = false;
+    driveButtons({ retry: true });
   } else if (result.method === "retry") {
     driveStatus("Files are ready. Tap <b>Share now</b> to open the share sheet.");
-    document.querySelector("#drive-retry").hidden = false;
+    driveButtons({ retry: true });
+  } else if (result.method === "inapp") {
+    driveStatus(DRIVE_INAPP_NOTE());
+    driveButtons({ copy: true, download: true });
   } else {
-    driveStatus(DRIVE_FALLBACK_NOTE);
+    driveStatus(
+      IAB.inApp
+        ? `${DRIVE_FALLBACK_NOTE}<br /><br />${DRIVE_INAPP_NOTE()}`
+        : `${DRIVE_FALLBACK_NOTE} Can’t find the downloads? Tap <b>Copy backup</b> and use <b>Paste backup</b> in another browser.`,
+    );
+    driveButtons({ copy: true });
     toast("Files downloaded");
   }
   els.driveDlg.dataset.result = result.method;
@@ -1097,6 +1156,210 @@ async function retryDriveShare() {
     return;
   }
   handleDriveResult(result);
+}
+
+function downloadDriveFiles() {
+  const files = state.driveFiles || [];
+  for (const f of files) downloadFile(f);
+  driveStatus(DRIVE_FALLBACK_NOTE);
+  driveButtons({ copy: true });
+  els.driveDlg.dataset.result = "download";
+}
+
+/* ---------- Copy / Paste backup (move between browsers on one phone) ---------- */
+
+function pageUrl() {
+  return `${location.origin}${location.pathname}`;
+}
+
+function closeOtherDialogs(keep) {
+  for (const dlg of document.querySelectorAll("dialog[open]")) if (dlg !== keep) dlg.close();
+}
+
+function copyStatus(html) {
+  document.querySelector("#copy-status").innerHTML = html;
+}
+
+function showCopyManual(show) {
+  const ta = document.querySelector("#copy-text");
+  document.querySelector("#copy-manual").hidden = !show;
+  document.querySelector("#copy-select").hidden = !show;
+  els.copyDlg.classList.toggle("full", show);
+  if (show) {
+    ta.value = state.copyText;
+    selectCopyText();
+  } else {
+    ta.value = "";
+  }
+}
+
+function selectCopyText() {
+  const ta = document.querySelector("#copy-text");
+  ta.focus({ preventScroll: true });
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+}
+
+function copiedMessage(counts, text) {
+  return `Copied backup · ${plural(counts.shifts, "shift")}, ${plural(counts.payslips, "payslip")} (${kb(text)}).`;
+}
+
+async function copyBackup() {
+  closeOtherDialogs(els.copyDlg);
+  if (!els.copyDlg.open) els.copyDlg.showModal();
+  delete els.copyDlg.dataset.method;
+  showCopyManual(false);
+  document.querySelector("#copy-next").hidden = true;
+  document.querySelector("#copy-again").hidden = true;
+  document.querySelector("#copy-share").hidden = true;
+  copyStatus("Preparing your backup…");
+  // Same payload and JSON as Export backup.
+  const payload = await db.exportBackup();
+  const text = JSON.stringify(payload);
+  state.copyText = text;
+  state.copyCounts = { shifts: payload.shifts.length, payslips: payload.payslips.length };
+  document.querySelector("#copy-share").hidden = typeof navigator.share !== "function";
+  await tryCopy();
+}
+
+async function tryCopy() {
+  const text = state.copyText;
+  const method = await copyText(text);
+  els.copyDlg.dataset.method = method || "manual";
+  if (method) {
+    showCopyManual(false);
+    copyStatus(`<b>${copiedMessage(state.copyCounts, text)}</b>`);
+    document.querySelector("#copy-next").hidden = false;
+    document.querySelector("#copy-again").hidden = false;
+    toast(`Copied ${plural(state.copyCounts.shifts, "shift")}`);
+  } else {
+    copyStatus(`Your backup is ready: ${plural(state.copyCounts.shifts, "shift")}, ${plural(state.copyCounts.payslips, "payslip")} (${kb(text)}).`);
+    showCopyManual(true);
+    document.querySelector("#copy-next").hidden = false;
+    document.querySelector("#copy-again").hidden = false;
+  }
+}
+
+async function shareBackupText() {
+  try {
+    await navigator.share({ title: "Pay Ledger backup", text: state.copyText });
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+    toast("Too big to share as text. Use Copy backup instead.");
+  }
+}
+
+async function copyLink() {
+  const method = await copyText(pageUrl());
+  toast(method ? "Link copied · paste it into Chrome" : `Couldn’t copy. The link is ${pageUrl()}`);
+}
+
+function pasteStatus(html, isError = false) {
+  const el = document.querySelector("#paste-status");
+  el.innerHTML = html;
+  el.classList.toggle("error", isError);
+}
+
+function openPaste() {
+  closeOtherDialogs(els.pasteDlg);
+  document.querySelector("#paste-text").value = "";
+  pasteStatus("");
+  document.querySelector("#paste-clipboard").hidden = !(navigator.clipboard && typeof navigator.clipboard.readText === "function");
+  if (!els.pasteDlg.open) els.pasteDlg.showModal();
+}
+
+async function pasteFromClipboard() {
+  try {
+    const text = await readClipboard();
+    if (!text || !text.trim()) {
+      pasteStatus("The clipboard is empty. Go back to the other browser and tap <b>Copy backup</b>.", true);
+      return;
+    }
+    document.querySelector("#paste-text").value = text;
+    pasteStatus(`Pasted ${kb(text)}. Tap <b>Import backup</b>.`);
+  } catch {
+    pasteStatus("This browser won’t let the page read the clipboard. Press and hold in the box and tap <b>Paste</b>.", true);
+  }
+}
+
+async function importPasted() {
+  let payload;
+  let prepared;
+  try {
+    payload = parseBackupText(document.querySelector("#paste-text").value);
+    prepared = db.prepareImport(payload);
+  } catch (err) {
+    pasteStatus(escapeHtml(err.message), true);
+    return;
+  }
+  pasteStatus(`Backup OK: ${plural(prepared.counts.shifts, "shift")}, ${plural(prepared.counts.payslips, "payslip")}.`);
+  const done = await confirmAndImport(payload, prepared.counts, els.pasteDlg);
+  if (done) els.pasteDlg.close();
+}
+
+function ledgerHasData(c) {
+  return c.shifts > 0 || c.payslips > 0 || c.files > 0 || c.jobs > 1 || (c.jobs === 1 && c.jobNames[0] !== "Job 1");
+}
+
+/**
+ * Shared by Import backup (file) and Paste backup. Shows counts, keeps a
+ * pre-import copy when this browser already has data, then imports in one
+ * transaction. Returns true when imported.
+ */
+async function confirmAndImport(payload, incoming, fromDlg = null) {
+  const current = await db.currentCounts();
+  const hasData = ledgerHasData(current);
+  if (hasData) {
+    const fewer = incoming.shifts < current.shifts ? " ⚠ The backup has FEWER shifts than this browser." : "";
+    const ok = await confirmDelete(
+      "Replace this ledger?",
+      `This browser has ${plural(current.shifts, "shift")} and ${plural(current.payslips, "payslip")}. ` +
+        `The backup has ${plural(incoming.shifts, "shift")} and ${plural(incoming.payslips, "payslip")}.${fewer} ` +
+        "Everything here will be replaced. A copy of this browser’s ledger is kept on this phone so you can undo it.",
+      "Replace",
+    );
+    if (!ok) {
+      if (fromDlg) pasteStatus("Import cancelled. Nothing was changed.");
+      return false;
+    }
+  }
+  try {
+    await db.importBackup(payload, { keepCurrent: hasData });
+  } catch (err) {
+    console.warn("Import failed, ledger unchanged", err);
+    const msg = `Import failed, nothing was changed: ${escapeHtml(err.message)}`;
+    if (fromDlg) pasteStatus(msg, true);
+    else toast(`Import failed, nothing was changed: ${err.message}`);
+    return false;
+  }
+  const after = await db.currentCounts();
+  await reload();
+  toast(
+    after.shifts === incoming.shifts
+      ? `Backup imported · ${plural(after.shifts, "shift")}, ${plural(after.payslips, "payslip")}`
+      : `Imported, but found ${after.shifts} of ${incoming.shifts} shifts. Check the Hours tab.`,
+  );
+  return true;
+}
+
+async function undoImport() {
+  const copy = await db.getPreImportCopy();
+  if (!copy) {
+    toast("No earlier ledger saved.");
+    return;
+  }
+  const payload = JSON.parse(copy.backup);
+  const counts = db.prepareImport(payload).counts;
+  const ok = await confirmDelete(
+    "Undo last import?",
+    `Puts back the ledger from before the last import (${plural(counts.shifts, "shift")}, ${plural(counts.payslips, "payslip")}). ` +
+      "What is here now is kept as the undo copy.",
+    "Undo import",
+  );
+  if (!ok) return;
+  await db.importBackup(payload, { keepCurrent: true });
+  await reload();
+  toast(`Restored ${plural(counts.shifts, "shift")}`);
 }
 
 async function exportJson() {
@@ -1123,18 +1386,14 @@ async function importJson(file) {
     toast("That JSON could not be read.");
     return;
   }
-  if (
-    !(await confirmDelete(
-      "Replace this ledger?",
-      "Import overwrites jobs, hours, payslips, and files in this browser.",
-      "Replace",
-    ))
-  ) {
+  let prepared;
+  try {
+    prepared = db.prepareImport(payload);
+  } catch (err) {
+    toast(err.message);
     return;
   }
-  await db.importBackup(payload);
-  toast("Backup imported");
-  await reload();
+  await confirmAndImport(payload, prepared.counts);
 }
 
 function closeDialogs(from) {
@@ -1267,7 +1526,27 @@ document.addEventListener("click", (event) => {
     driveStatus(`Could not prepare the files: ${escapeHtml(err.message)}`);
   });
   if (event.target.id === "drive-retry") retryDriveShare().catch((err) => toast(err.message));
+  if (event.target.id === "drive-download") downloadDriveFiles();
+  if (event.target.closest("[data-copy-backup]")) copyBackup().catch((err) => {
+    console.error(err);
+    copyStatus(`Could not prepare the backup: ${escapeHtml(err.message)}`);
+  });
+  if (event.target.id === "copy-again") tryCopy().catch((err) => toast(err.message));
+  if (event.target.id === "copy-select") selectCopyText();
+  if (event.target.id === "copy-share") shareBackupText();
+  if (event.target.closest("[data-copy-link]")) copyLink();
+  if (event.target.closest("[data-paste-backup]")) openPaste();
+  if (event.target.id === "paste-clipboard") pasteFromClipboard();
+  if (event.target.id === "paste-import") importPasted().catch((err) => pasteStatus(escapeHtml(err.message), true));
+  if (event.target.closest("[data-undo-import]")) undoImport().catch((err) => toast(err.message));
 });
+
+for (const el of document.querySelectorAll("[data-page-url]")) el.textContent = pageUrl();
+if (IAB.inApp) {
+  for (const el of document.querySelectorAll("[data-iab-name]")) el.textContent = inAppLabel(IAB);
+  document.querySelector("#iab-banner").hidden = false;
+  document.documentElement.classList.add("in-app-browser");
+}
 
 ["dragenter", "dragover"].forEach((name) => {
   els.drop.addEventListener(name, (e) => {

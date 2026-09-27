@@ -15,7 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/app.css?v=2" />
+    <link rel="stylesheet" href="css/app.css?v=3" />
   </head>
   <body>
     <div class="glow glow-a" aria-hidden="true"></div>
@@ -35,6 +35,20 @@
           <button class="btn primary" type="button" data-open="shift">Log hours</button>
         </div>
       </header>
+
+      <section class="iab-banner" id="iab-banner" hidden aria-labelledby="iab-title">
+        <p class="iab-title" id="iab-title"><b>You’re inside <span data-iab-name>Messenger’s browser</span>.</b> Your data here is separate from Chrome.</p>
+        <p class="iab-steps">Tap <b>Copy backup</b>, then open this page in Chrome and tap <b>Paste backup</b>.</p>
+        <div class="iab-actions">
+          <button class="btn primary" type="button" data-copy-backup>Copy backup</button>
+          <button class="btn" type="button" data-paste-backup>Paste backup</button>
+        </div>
+        <div class="iab-link">
+          <code data-page-url>https://timesnapx.github.io/pay-ledger/</code>
+          <button class="btn" type="button" data-copy-link>Copy link</button>
+        </div>
+        <p class="iab-hint">To open in Chrome: tap <b>⋮</b> or <b>⋯</b> at the top right and choose <b>Open in Chrome</b> / <b>Open in browser</b>. Or copy the link and paste it into Chrome <i>before</i> you copy the backup (the clipboard holds one thing at a time).</p>
+      </section>
 
       <nav class="tabs" aria-label="Sections">
         <button class="tab" type="button" data-view="overview" aria-selected="true">Overview</button>
@@ -399,7 +413,11 @@
         <ul class="drive-files" id="drive-files"></ul>
         <p class="drive-status" id="drive-status" role="status"></p>
         <div class="dlg-actions">
+          <div class="left">
+            <button class="btn" type="button" id="drive-download" hidden>Download files instead</button>
+          </div>
           <div class="right">
+            <button class="btn primary" type="button" id="drive-copy" data-copy-backup hidden>Copy backup</button>
             <button class="btn primary" type="button" id="drive-retry" hidden>Share now</button>
             <button class="btn" type="button" data-close>Done</button>
           </div>
@@ -407,8 +425,62 @@
       </div>
     </dialog>
 
+    <dialog id="dlg-copy" aria-labelledby="copy-title">
+      <div class="dlg">
+        <header>
+          <div>
+            <p class="eyebrow">Move to another browser</p>
+            <h2 id="copy-title">Copy backup</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close>Close</button>
+        </header>
+        <p class="copy-status" id="copy-status" role="status"></p>
+        <div id="copy-manual" hidden>
+          <p class="helper">Couldn’t copy automatically. Tap <b>Select all</b>, then choose <b>Copy</b> from the menu. Or press and hold in the box, tap <b>Select all</b>, then <b>Copy</b>.</p>
+          <textarea id="copy-text" class="backup-text" readonly spellcheck="false" autocomplete="off" aria-label="Backup text"></textarea>
+        </div>
+        <div id="copy-next" hidden>
+          <p class="helper"><b>Next:</b> open this page in Chrome (not here) and tap <b>Paste backup</b>.<br />Link: <code data-page-url>https://timesnapx.github.io/pay-ledger/</code></p>
+        </div>
+        <div class="dlg-actions">
+          <div class="left">
+            <button class="btn" type="button" id="copy-share" hidden>Share backup as text</button>
+          </div>
+          <div class="right">
+            <button class="btn" type="button" id="copy-select" hidden>Select all</button>
+            <button class="btn primary" type="button" id="copy-again" hidden>Copy again</button>
+            <button class="btn" type="button" data-close>Done</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="dlg-paste" aria-labelledby="paste-title">
+      <div class="dlg">
+        <header>
+          <div>
+            <p class="eyebrow">Move from another browser</p>
+            <h2 id="paste-title">Paste backup</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close>Close</button>
+        </header>
+        <p class="muted">In the other browser (e.g. Messenger) tap <b>Copy backup</b>. Then come back here and tap <b>Paste from clipboard</b>, or press and hold in the box and tap <b>Paste</b>.</p>
+        <textarea id="paste-text" class="backup-text" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Backup text goes here" aria-label="Backup text"></textarea>
+        <p class="paste-status" id="paste-status" role="status"></p>
+        <div class="dlg-actions">
+          <div class="left">
+            <button class="btn" type="button" id="paste-clipboard">Paste from clipboard</button>
+          </div>
+          <div class="right">
+            <button class="btn" type="button" data-close>Cancel</button>
+            <button class="btn primary" type="button" id="paste-import">Import backup</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" hidden role="status"></div>
 
-    <script type="module" src="js/app.js?v=2"></script>
+    <script type="module" src="js/app.js?v=3"></script>
   </body>
 </html>
