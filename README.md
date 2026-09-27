@@ -66,6 +66,30 @@ sheet opens and you pick Drive. Nothing is uploaded to the website. Shares:
 If the browser can't share files, the three files are downloaded instead; upload them to a
 "Pay Ledger" folder in Drive.
 
+## Auto-save to Drive
+
+Overview → Private copy (and Jobs → Save to Google Drive) → **Connect Google Drive**. After that,
+every change (shift / payslip / job add, edit, delete, import) is saved to Drive about 5 seconds
+later, with no share sheet. IndexedDB stays the source of truth; Drive holds a copy.
+
+- Google Identity Services token client (`https://accounts.google.com/gsi/client`), scope
+  **only** `https://www.googleapis.com/auth/drive.file` (the app sees only files it created).
+  No backend, no client secret.
+- Setup: put the OAuth Client ID (Web application) in `js/drive-config.js` →
+  `GOOGLE_CLIENT_ID`. Authorized JavaScript origin: `https://timesnapx.github.io`.
+  Empty = the panel says auto-save isn't set up yet.
+- Folder **Pay Ledger (auto)** in My Drive, files updated in place (same file IDs, no duplicates):
+  `pay-ledger-hours.csv` (text/csv, not converted to Sheets, no BOM), `pay-ledger-backup.json`,
+  `pay-ledger-summary.html`, plus `pay-ledger-backup-YYYY-Www.json` created once per ISO week.
+- State in the meta store (this browser only, never in backups, kept across imports):
+  `driveSync` (folder/file IDs, last saved, account), `driveDirty` (unsynced changes survive a
+  reload), `driveToken` (~1 h access token).
+- Tokens last ~1 hour. A silent refresh is tried once; browsers usually block that popup without
+  a tap, so the status then says **Sign in again** and one tap on **Tap to reconnect** saves
+  everything that was waiting. 401 → one silent retry; 404 / file in the bin → recreated;
+  offline → retried when back online. Errors only show in the status line.
+- Hidden inside in-app browsers (Messenger etc.): Google blocks sign-in in embedded webviews.
+
 ## Move between browsers (Messenger → Chrome)
 
 Each browser keeps its own copy of the ledger. Links opened from Facebook Messenger, Facebook,

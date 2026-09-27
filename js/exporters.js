@@ -12,7 +12,7 @@ import {
   shiftPay,
   suggestDayType,
   sumBy,
-} from "./money.js?v=3";
+} from "./money.js?v=4";
 
 /** Pay figures for a stored shift. Meal allowance is separate and never in estGross. */
 export function shiftFigures(s) {

@@ -1,6 +1,6 @@
-import { BEVCHAIN_RULES } from "./money.js?v=3";
-import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=3";
-export { shiftsToCsv } from "./exporters.js?v=3";
+import { BEVCHAIN_RULES } from "./money.js?v=4";
+import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=4";
+export { shiftsToCsv } from "./exporters.js?v=4";
 
 const DB_NAME = "pay-ledger";
 /** IndexedDB version == data schema version. v2: pay rules + meal allowance. */
@@ -133,11 +133,22 @@ export async function get(store, id) {
   });
 }
 
+/** Fired on window after jobs / shifts / payslips / files change (not meta), e.g. for Drive auto-save. */
+export const DATA_CHANGED_EVENT = "pay-ledger:data-changed";
+
+function dataChanged(store) {
+  if (store === "meta") return;
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent(DATA_CHANGED_EVENT, { detail: { store } }));
+  } catch {}
+}
+
 export async function put(store, value) {
   const db = await openDb();
   const tx = db.transaction(store, "readwrite");
   tx.objectStore(store).put(value);
   await txDone(tx);
+  dataChanged(store);
   return value;
 }
 
@@ -146,6 +157,7 @@ export async function del(store, id) {
   const tx = db.transaction(store, "readwrite");
   tx.objectStore(store).delete(id);
   await txDone(tx);
+  dataChanged(store);
 }
 
 export async function clearAll() {
@@ -153,6 +165,7 @@ export async function clearAll() {
   const tx = db.transaction(STORES, "readwrite");
   for (const store of STORES) tx.objectStore(store).clear();
   await txDone(tx);
+  dataChanged("all");
 }
 
 export function uid() {
@@ -206,13 +219,17 @@ export async function exportBackup() {
     shifts,
     payslips,
     files: packedFiles,
-    // The pre-import safety copy stays on this device only (keeps backups small).
-    meta: meta.filter((m) => m.key !== PRE_IMPORT_KEY),
+    // The pre-import safety copy and Drive auto-save state stay on this device only.
+    meta: meta.filter((m) => !DEVICE_ONLY_META.has(m.key)),
   };
 }
 
 /** meta key holding the ledger as it was just before the last backup import. */
 export const PRE_IMPORT_KEY = "preImportBackup";
+
+/** Drive auto-save state: belongs to this browser, never exported, kept across imports. */
+export const DRIVE_META_KEYS = Object.freeze(["driveSync", "driveDirty", "driveToken"]);
+const DEVICE_ONLY_META = new Set([PRE_IMPORT_KEY, ...DRIVE_META_KEYS]);
 
 function countOf(data) {
   return {
@@ -242,7 +259,7 @@ export function prepareImport(payload) {
     uploadedAt: file.uploadedAt,
     blob: safeBlob(file),
   }));
-  const meta = data.meta.filter((row) => row.key !== PRE_IMPORT_KEY);
+  const meta = data.meta.filter((row) => !DEVICE_ONLY_META.has(row.key));
   const prepared = { jobs: data.jobs, shifts: data.shifts, payslips: data.payslips, meta, files };
   return { ...prepared, counts: countOf(prepared), exportedAt: payload.exportedAt || null };
 }
@@ -277,11 +294,14 @@ export async function importBackup(payload, { keepCurrent = false } = {}) {
       value: { savedAt: new Date().toISOString(), counts: countOf(current), backup: JSON.stringify(current) },
     };
   }
+  // This browser's Drive connection is not part of the ledger: keep it.
+  const keepDrive = (await Promise.all(DRIVE_META_KEYS.map((key) => get("meta", key)))).filter(Boolean);
   const db = await openDb();
   const tx = db.transaction(STORES, "readwrite");
   const done = txDone(tx);
   try {
     for (const store of STORES) tx.objectStore(store).clear();
+    for (const row of keepDrive) tx.objectStore("meta").put(row);
     for (const job of data.jobs) tx.objectStore("jobs").put(job);
     for (const shift of data.shifts) tx.objectStore("shifts").put(shift);
     for (const slip of data.payslips) tx.objectStore("payslips").put(slip);
@@ -296,6 +316,7 @@ export async function importBackup(payload, { keepCurrent = false } = {}) {
     throw err;
   }
   await done;
+  dataChanged("all");
   return data.counts;
 }
 

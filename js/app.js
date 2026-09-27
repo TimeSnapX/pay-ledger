@@ -1,4 +1,4 @@
-import * as db from "./db.js?v=3";
+import * as db from "./db.js?v=4";
 import {
   AUD_EXACT,
   BEVCHAIN_RULES,
@@ -33,11 +33,13 @@ import {
   todayISO,
   weekEnd,
   weekStart,
-} from "./money.js?v=3";
-import { withPay } from "./migrate.js?v=3";
-import { buildSummaryHtml } from "./exporters.js?v=3";
-import { downloadFile, pickShareableFiles, shareOrDownload } from "./share.js?v=3";
-import { copyText, detectInAppBrowser, inAppLabel, kb, parseBackupText, plural, readClipboard } from "./transfer.js?v=3";
+} from "./money.js?v=4";
+import { withPay } from "./migrate.js?v=4";
+import { buildSummaryHtml } from "./exporters.js?v=4";
+import { downloadFile, pickShareableFiles, shareOrDownload } from "./share.js?v=4";
+import { copyText, detectInAppBrowser, inAppLabel, kb, parseBackupText, plural, readClipboard } from "./transfer.js?v=4";
+import { GOOGLE_CLIENT_ID } from "./drive-config.js?v=4";
+import { DRIVE_FILES, FOLDER_NAME, createDriveSync, describeDriveStatus } from "./drive-sync.js?v=4";
 
 /** Messenger / Facebook / Instagram etc. open links in their own browser with its own storage. */
 const IAB = detectInAppBrowser();
@@ -57,6 +59,7 @@ const state = {
   driveFiles: null,
   copyText: "",
   preImport: null,
+  drive: null,
 };
 
 const els = {
@@ -437,10 +440,78 @@ function drivePanel() {
         </div>
         <button class="btn drive-btn" type="button" data-drive>Save to Google Drive</button>
       </div>
+      ${autoSaveBlock()}
       ${transferButtons()}
     </article>
   `;
 }
+
+/* ---------- Auto-save to Drive (Google sign-in, drive.file scope) ---------- */
+
+function autoSaveBlock() {
+  const s = state.drive || drive.snapshot();
+  return `<div class="auto-save" data-drive-auto data-status="${s.status}">${autoSaveInner(s)}</div>`;
+}
+
+function autoSaveInner(s) {
+  const text = describeDriveStatus(s, { inAppName: inAppLabel(IAB) });
+  const connected = s.connected && s.configured && !s.inApp;
+  let buttons = "";
+  if (s.status === "unconfigured") {
+    buttons = `<button class="btn" type="button" disabled>Connect Google Drive</button>`;
+  } else if (s.status === "inapp") {
+    buttons = "";
+  } else if (!connected) {
+    buttons = `<button class="btn primary" type="button" data-drive-connect ${s.status === "connecting" ? "disabled" : ""}>Connect Google Drive</button>`;
+  } else if (s.status === "reconnect") {
+    buttons = `<button class="btn primary" type="button" data-drive-connect>Tap to reconnect</button>
+      <button class="btn ghost" type="button" data-drive-disconnect>Disconnect</button>`;
+  } else {
+    buttons = `<button class="btn" type="button" data-drive-now ${s.status === "saving" || s.status === "connecting" ? "disabled" : ""}>Save now</button>
+      <button class="btn ghost" type="button" data-drive-disconnect>Disconnect</button>`;
+  }
+  const where = connected
+    ? `<p class="helper">Folder <b>${escapeHtml(FOLDER_NAME)}</b> in My Drive: ${DRIVE_FILES.map((f) => escapeHtml(f.name)).join(", ")}, plus one dated backup a week.${s.email ? ` Signed in as ${escapeHtml(s.email)}.` : ""}</p>`
+    : "";
+  return `
+    <div class="auto-head">
+      <b>Auto-save to Drive</b>
+      <span class="auto-dot" aria-hidden="true"></span>
+    </div>
+    <p class="auto-status" data-drive-status role="status">${escapeHtml(text)}</p>
+    ${where}
+    ${buttons ? `<div class="auto-actions">${buttons}</div>` : ""}
+  `;
+}
+
+function renderAutoSave(snap) {
+  state.drive = snap;
+  for (const el of document.querySelectorAll("[data-drive-auto]")) {
+    el.dataset.status = snap.status;
+    el.innerHTML = autoSaveInner(snap);
+  }
+}
+
+/** File contents for Drive, from the same generators as Save to Google Drive / Export. */
+async function driveContents() {
+  const payload = await db.exportBackup();
+  const [rawShifts, jobs, payslips] = await Promise.all([db.all("shifts"), db.all("jobs"), db.all("payslips")]);
+  return {
+    json: JSON.stringify(payload),
+    // No BOM here: other tools read this CSV straight from Drive.
+    csv: db.shiftsToCsv(rawShifts, jobs),
+    html: buildSummaryHtml({ jobs, shifts: rawShifts, payslips, now: new Date() }),
+  };
+}
+
+const drive = createDriveSync({
+  clientId: GOOGLE_CLIENT_ID,
+  inApp: IAB.inApp,
+  getMeta: async (key) => (await db.get("meta", key))?.value ?? null,
+  setMeta: (key, value) => db.put("meta", { key, value }),
+  buildFiles: driveContents,
+  onChange: renderAutoSave,
+});
 
 function transferButtons() {
   return `
@@ -664,6 +735,7 @@ function renderJobs() {
         </div>
         <button class="btn primary drive-btn" type="button" data-drive>Save to Google Drive</button>
       </div>
+      ${autoSaveBlock()}
       <p class="helper">Moving between browsers on this phone (e.g. Messenger → Chrome)? <b>Copy backup</b> in one, <b>Paste backup</b> in the other.</p>
       ${transferButtons()}
     </article>
@@ -1539,6 +1611,10 @@ document.addEventListener("click", (event) => {
   if (event.target.id === "paste-clipboard") pasteFromClipboard();
   if (event.target.id === "paste-import") importPasted().catch((err) => pasteStatus(escapeHtml(err.message), true));
   if (event.target.closest("[data-undo-import]")) undoImport().catch((err) => toast(err.message));
+  // Auto-save to Drive: never blocks the UI, problems only show in the status line.
+  if (event.target.closest("[data-drive-connect]")) drive.connect().catch((err) => console.warn(err));
+  if (event.target.closest("[data-drive-disconnect]")) drive.disconnect().catch((err) => console.warn(err));
+  if (event.target.closest("[data-drive-now]")) drive.syncNow().catch((err) => console.warn(err));
 });
 
 for (const el of document.querySelectorAll("[data-page-url]")) el.textContent = pageUrl();
@@ -1688,6 +1764,8 @@ async function applyChronaSeed() {
   else toast("Those Chrona shifts were already logged");
   return added;
 }
+
+drive.init().catch((err) => console.warn("Drive auto-save unavailable", err));
 
 reload()
   .then(() => applyChronaSeed())

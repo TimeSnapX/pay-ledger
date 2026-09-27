@@ -809,3 +809,26 @@ dialog.full .backup-text { min-height: 55vh; }
   border-radius: 16px;
 }
 .empty-transfer p { margin: 0 0 10px; }
+
+/* ---------- Auto-save to Drive ---------- */
+.auto-save {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.auto-head { display: flex; align-items: center; gap: 8px; }
+.auto-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.auto-save[data-status="saved"] .auto-dot { background: var(--mint); }
+.auto-save[data-status="pending"] .auto-dot,
+.auto-save[data-status="saving"] .auto-dot,
+.auto-save[data-status="connecting"] .auto-dot { background: var(--amber); }
+.auto-save[data-status="offline"] .auto-dot,
+.auto-save[data-status="error"] .auto-dot,
+.auto-save[data-status="reconnect"] .auto-dot { background: var(--danger); }
+.auto-status { margin: 6px 0; font-size: 14px; line-height: 1.45; color: var(--ink); }
+.auto-save[data-status="reconnect"] .auto-status,
+.auto-save[data-status="error"] .auto-status { color: var(--amber-2); }
+.auto-save .helper { word-break: break-word; }
+.auto-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

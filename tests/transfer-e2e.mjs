@@ -47,7 +47,7 @@ async function newPage(ua, { clipboard = true } = {}) {
 
 const dump = (page) =>
   page.evaluate(async () => {
-    const db = await import("/pay-ledger/js/db.js?v=3");
+    const db = await import("/pay-ledger/js/db.js?v=4");
     const [jobs, shifts, payslips, files, meta] = await Promise.all(["jobs", "shifts", "payslips", "files", "meta"].map((s) => db.all(s)));
     const sort = (a) => [...a].sort((x, y) => String(x.id ?? x.key).localeCompare(String(y.id ?? y.key)));
     const fileSigs = await Promise.all(sort(files).map(async (f) => ({ id: f.id, name: f.name, size: f.blob.size, bytes: Array.from(new Uint8Array(await f.blob.arrayBuffer())).join(",").length })));
@@ -64,9 +64,9 @@ console.log("1. Messenger UA: seed ~460 KB ledger");
 const m = await newPage(MESSENGER_UA);
 await m.page.goto(`${APP}#/overview`, { waitUntil: "networkidle" });
 await m.page.evaluate(async () => {
-  const db = await import("/pay-ledger/js/db.js?v=3");
-  const { withPay } = await import("/pay-ledger/js/migrate.js?v=3");
-  const { BEVCHAIN_RULES } = await import("/pay-ledger/js/money.js?v=3");
+  const db = await import("/pay-ledger/js/db.js?v=4");
+  const { withPay } = await import("/pay-ledger/js/migrate.js?v=4");
+  const { BEVCHAIN_RULES } = await import("/pay-ledger/js/money.js?v=4");
   const job = { id: "job-bev", name: "BevChain", ...BEVCHAIN_RULES, breakMins: 30, color: "#e2a336", createdAt: "2026-01-01T00:00:00.000Z" };
   const shifts = [];
   for (let i = 0; i < 700; i++) {
@@ -123,7 +123,7 @@ check(/Copied backup \u00b7 700 shifts, 1 payslip \(\d+ KB\)/.test(copyStatus), 
 const clip = await m.page.evaluate(() => navigator.clipboard.readText());
 log(`clipboard: ${Math.round(clip.length / 1024)} KB`);
 check(clip.length > 400000, "large backup text on clipboard (>400 KB)");
-const exported = await m.page.evaluate(async () => JSON.stringify(await (await import("/pay-ledger/js/db.js?v=3")).exportBackup()));
+const exported = await m.page.evaluate(async () => JSON.stringify(await (await import("/pay-ledger/js/db.js?v=4")).exportBackup()));
 const strip = (t) => { const o = JSON.parse(t); delete o.exportedAt; return JSON.stringify(o); };
 check(strip(clip) === strip(exported), "clipboard text == Export backup JSON (except exportedAt)");
 check(await m.page.locator("#copy-next").isVisible(), "next-step hint shown");
@@ -228,13 +228,13 @@ const replaced = await dump(c.page);
 check(replaced.shifts.length === 50, "replaced with 50 shifts");
 const pre = replaced.meta.find((r) => r.key === "preImportBackup");
 check(pre && pre.value.counts.shifts === 700 && JSON.parse(pre.value.backup).shifts.length === 700, "pre-import copy holds the 700-shift ledger");
-const reExport = await c.page.evaluate(async () => (await (await import("/pay-ledger/js/db.js?v=3")).exportBackup()).meta.map((r) => r.key));
+const reExport = await c.page.evaluate(async () => (await (await import("/pay-ledger/js/db.js?v=4")).exportBackup()).meta.map((r) => r.key));
 check(!reExport.includes("preImportBackup"), "pre-import copy is not put into new backups");
 check(await c.page.locator("#view-jobs [data-undo-import]").isVisible(), "Undo last import button shown");
 await c.page.click("#view-jobs [data-undo-import]");
 await c.page.waitForFunction(() => document.querySelector("#dlg-confirm").open);
 await c.page.click("#dlg-confirm [value='ok']");
-await c.page.waitForFunction(async () => (await (await import("/pay-ledger/js/db.js?v=3")).all("shifts")).length === 700, null, { timeout: 15000 });
+await c.page.waitForFunction(async () => (await (await import("/pay-ledger/js/db.js?v=4")).all("shifts")).length === 700, null, { timeout: 15000 });
 const undone = await dump(c.page);
 check(cmp(undone.shifts, seeded.shifts) && cmp(undone.files, seeded.files), "undo restored the identical 700 shifts + file");
 await c.page.screenshot({ path: path.join(SHOTS, "transfer-6-jobs-tools.png"), fullPage: true });
@@ -248,7 +248,7 @@ await f.page.addInitScript(() => {
   document.execCommand = () => false;
 });
 await f.page.goto(`${APP}#/overview`, { waitUntil: "networkidle" });
-await f.page.evaluate(async (t) => (await import("/pay-ledger/js/db.js?v=3")).importBackup(JSON.parse(t)), clip);
+await f.page.evaluate(async (t) => (await import("/pay-ledger/js/db.js?v=4")).importBackup(JSON.parse(t)), clip);
 await f.page.reload({ waitUntil: "networkidle" });
 await f.page.click("#iab-banner [data-copy-backup]");
 await f.page.waitForFunction(() => document.querySelector("#dlg-copy").dataset.method, null, { timeout: 15000 });
