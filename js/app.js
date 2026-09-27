@@ -1,10 +1,13 @@
-﻿import * as db from "./db.js";
+import * as db from "./db.js?v=2";
 import {
   AUD_EXACT,
+  BEVCHAIN_RULES,
   DAY_TYPES,
   dayTypeMeta,
+  formatClock,
   formatDay,
   formatDayShort,
+  formatHM,
   formatHours,
   formatMonth,
   formatSplit,
@@ -16,8 +19,13 @@ import {
   hoursFromClock,
   hoursFromParts,
   inRange,
+  mealAmount,
+  mealDefault,
+  normalizeRules,
   roundCents,
+  rulesOf,
   shiftPay,
+  formatShiftTimes,
   splitHours,
   suggestDayType,
   sumBy,
@@ -25,7 +33,10 @@ import {
   todayISO,
   weekEnd,
   weekStart,
-} from "./money.js";
+} from "./money.js?v=2";
+import { withPay } from "./migrate.js?v=2";
+import { buildSummaryHtml } from "./exporters.js?v=2";
+import { downloadFile, shareOrDownload } from "./share.js?v=2";
 
 const state = {
   view: "overview",
@@ -38,6 +49,8 @@ const state = {
   dayType: "weekday",
   pendingFile: null,
   existingFileName: "",
+  mealTouched: false,
+  driveFiles: null,
 };
 
 const els = {
@@ -51,6 +64,7 @@ const els = {
   jobDlg: document.querySelector("#dlg-job"),
   viewerDlg: document.querySelector("#dlg-viewer"),
   confirmDlg: document.querySelector("#dlg-confirm"),
+  driveDlg: document.querySelector("#dlg-drive"),
   toast: document.querySelector("#toast"),
   drop: document.querySelector("#drop-zone"),
   dropLabel: document.querySelector("#drop-label"),
@@ -162,15 +176,22 @@ async function reload() {
   state.shifts = shifts.map(enrichShift).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   state.payslips = payslips.sort((a, b) => b.payDate.localeCompare(a.payDate));
   render();
+  if (upgradeWasBlocked) {
+    upgradeWasBlocked = false;
+    toast("Ledger updated · all shifts and payslips kept");
+  }
 }
 
 function enrichShift(s) {
   const dayType = s.dayType || suggestDayType(s.date);
-  const calc = shiftPay(s.workedHours, s.breakMins, s.rate, dayType);
+  const calc = shiftPay(s.workedHours, s.breakMins, rulesOf(s), dayType);
   const actualGross = s.actualGross ?? null;
   return {
     ...s,
     dayType,
+    calc,
+    meal: Boolean(s.meal),
+    mealAmount: mealAmount(s),
     afterBreak: calc.afterBreak,
     paidHours: calc.paidHours,
     ordinaryHours: calc.ordinary,
@@ -242,6 +263,8 @@ function renderOverview() {
   const maxWeek = Math.max(1, ...weeks.map((w) => w.gross));
   const maxMonth = Math.max(1, ...months.map((m) => Math.max(m.gross, m.slipNet, m.income)));
   const fyEst = sumBy(fy, (s) => s.estGross);
+  const fyMeal = sumBy(fy, (s) => s.mealAmount);
+  const weekMeal = sumBy(week, (s) => s.mealAmount);
   const fyActualGross = sumBy(fySlips, (p) => p.gross);
   const fyActualNet = sumBy(fySlips, (p) => p.net);
   const fyTax = sumBy(fySlips, (p) => p.tax);
@@ -254,7 +277,7 @@ function renderOverview() {
       <div class="empty">
         <p class="eyebrow">Start the record</p>
         <h2>Log a shift or drop in a payslip</h2>
-        <p>Track hours as you work, keep the PDF on file, and watch take-home from payslips. Default rate is $41.21. Weekday OT is 1.5Ã— after 8h and 2Ã— after 10h. Saturday and Sunday use their own rates.</p>
+        <p>Track hours as you work, keep the PDF on file, and watch take-home from payslips. Weekday: $41.21 for the first 7.6h, then $52.75 for 2h, then $69.23. Meal allowance is tracked separately, tax-free. Saturday and Sunday use their own rates.</p>
         <div class="top-actions" style="justify-content:center">
           <button class="btn" type="button" data-open="payslip">Add payslip</button>
           <button class="btn primary" type="button" data-open="shift">Log hours</button>
@@ -272,22 +295,24 @@ function renderOverview() {
       <article class="stat-card">
         <p class="label">${fyLabel(now)} ${fySlips.length ? "actual net" : "est. gross"}</p>
         <p class="stat-value">${AUD_EXACT.format(yearMain)}</p>
-        <p class="sub">${fySlips.length ? "payslip take-home Â· source of truth" : "no payslip yet Â· hours estimate"}</p>
+        <p class="sub">${fySlips.length ? "payslip take-home · source of truth" : "no payslip yet · hours estimate"}</p>
       </article>
       <article class="stat-card">
-        <p class="label">This week Â· est. gross</p>
+        <p class="label">This week · est. gross</p>
         <p class="stat-value">${AUD_EXACT.format(sumBy(week, (s) => s.estGross))}</p>
-        <p class="sub">${formatHours(sumBy(week, (s) => s.paidHours))} paid Â· ${week.length} shift${week.length === 1 ? "" : "s"}</p>
+        <p class="sub">${formatHours(sumBy(week, (s) => s.paidHours))} paid · ${week.length} shift${week.length === 1 ? "" : "s"}</p>
+        ${mealLine(weekMeal, week)}
       </article>
       <article class="stat-card">
         <p class="label">${fyLabel(now)} est. gross</p>
         <p class="stat-value">${AUD_EXACT.format(fyEst)}</p>
-        <p class="sub">${formatHours(sumBy(fy, (s) => s.paidHours))} logged Â· ${fy.length} shift${fy.length === 1 ? "" : "s"}</p>
+        <p class="sub">${formatHours(sumBy(fy, (s) => s.paidHours))} logged · ${fy.length} shift${fy.length === 1 ? "" : "s"}</p>
+        ${mealLine(fyMeal, fy)}
       </article>
       <article class="stat-card">
         <p class="label">${fyLabel(now)} actual gross</p>
         <p class="stat-value">${AUD_EXACT.format(fyActualGross)}</p>
-        <p class="sub">${fySlips.length} slip${fySlips.length === 1 ? "" : "s"} Â· tax ${AUD_EXACT.format(fyTax)} Â· super ${AUD_EXACT.format(fySuper)}${fyDed ? ` Â· other ${AUD_EXACT.format(fyDed)}` : ""}</p>
+        <p class="sub">${fySlips.length} slip${fySlips.length === 1 ? "" : "s"} · tax ${AUD_EXACT.format(fyTax)} · super ${AUD_EXACT.format(fySuper)}${fyDed ? ` · other ${AUD_EXACT.format(fyDed)}` : ""}</p>
       </article>
     </div>
     <div class="charts">
@@ -373,6 +398,27 @@ function renderOverview() {
         </div>
       </article>
     </div>
+    ${drivePanel()}
+  `;
+}
+
+function mealLine(amount, rows) {
+  const n = rows.filter((s) => s.mealAmount).length;
+  if (!n) return "";
+  return `<p class="sub meal-sub">+ meal ${AUD_EXACT.format(amount)} tax-free · ${n} × · not in gross</p>`;
+}
+
+function drivePanel() {
+  return `
+    <article class="panel drive-panel">
+      <div class="panel-head">
+        <div>
+          <h2>Private copy</h2>
+          <p>Saves a private copy to your Drive. Nothing is uploaded to the website.</p>
+        </div>
+        <button class="btn drive-btn" type="button" data-drive>Save to Google Drive</button>
+      </div>
+    </article>
   `;
 }
 
@@ -381,17 +427,23 @@ function shiftRow(s) {
   const day = dayTypeMeta(s.dayType).label;
   const varText =
     s.variance != null
-      ? ` Â· var ${s.variance >= 0 ? "+" : "âˆ’"}${AUD_EXACT.format(Math.abs(s.variance))}`
+      ? ` · var ${s.variance >= 0 ? "+" : "−"}${AUD_EXACT.format(Math.abs(s.variance))}`
       : "";
   const netText = s.actualNet != null ? `<small>net ${AUD_EXACT.format(s.actualNet)}</small>` : `<small>est. gross</small>`;
+  const mealRate = Number(s.mealRate) || 0;
+  const mealText = mealRate
+    ? `<small class="meal-flag ${s.meal ? "on" : ""}"><i class="tick" aria-hidden="true"></i>Meal ${AUD_EXACT.format(mealRate)} ${s.meal ? "· tax-free" : "not claimed"}</small>`
+    : "";
   return `
     <button class="row" type="button" data-edit-shift="${s.id}">
       <span class="dot" style="background:${jobColor(s.jobId)}"></span>
       <span>
         <b>${formatDay(s.date)}</b>
-        <small>${escapeHtml(job?.name || "Job")} Â· ${escapeHtml(day)} Â· worked ${formatHours(s.afterBreak ?? s.workedHours)} Â· paid ${formatHours(s.paidHours)} Â· ${formatSplit({ ordinary: s.ordinaryHours, timeAndHalf: s.timeAndHalfHours, double: s.doubleHours })}${varText}</small>
+        <small class="shift-times">${escapeHtml(formatShiftTimes(s, s.paidHours))}</small>
+        <small>${escapeHtml(job?.name || "Job")} · ${escapeHtml(day)} · ${formatSplit(s.calc)}${varText}</small>
+        ${mealText}
       </span>
-      <span class="money">${AUD_EXACT.format(s.estGross)}${netText}</span>
+      <span class="money">${AUD_EXACT.format(s.estGross)}${netText}${s.mealAmount ? `<small class="meal-amt">+ ${AUD_EXACT.format(s.mealAmount)} meal</small>` : ""}</span>
     </button>
   `;
 }
@@ -403,7 +455,7 @@ function slipRow(p) {
       <span class="dot" style="background:${jobColor(p.jobId)}"></span>
       <span>
         <b>Paid ${formatDayShort(p.payDate)}</b>
-        <small>${escapeHtml(job?.name || "Job")}${p.fileId ? " Â· file on record" : ""}</small>
+        <small>${escapeHtml(job?.name || "Job")}${p.fileId ? " · file on record" : ""}</small>
       </span>
       <span class="money">${AUD_EXACT.format(p.net || 0)}<small>net</small></span>
     </button>
@@ -413,12 +465,15 @@ function slipRow(p) {
 function renderHours() {
   const rows = filteredShifts();
   const totalH = sumBy(rows, (s) => s.paidHours);
-  const totalG = sumBy(rows, (s) => s.gross);
+  const totalG = sumBy(rows, (s) => s.estGross);
+  const totalMeal = sumBy(rows, (s) => s.mealAmount);
+  const mealCount = rows.filter((s) => s.mealAmount).length;
   els.hours.innerHTML = `
     <div class="toolbar">
       <div>
         <h2 style="font-size:22px;margin:0">Hours</h2>
-        <p class="muted">${rows.length} shift${rows.length === 1 ? "" : "s"} Â· ${formatHours(totalH)} paid Â· est. ${AUD_EXACT.format(totalG)}</p>
+        <p class="muted">${rows.length} shift${rows.length === 1 ? "" : "s"} · ${formatHours(totalH)} paid · est. gross ${AUD_EXACT.format(totalG)}</p>
+        <p class="muted meal-sub">Meal allowance ${AUD_EXACT.format(totalMeal)} tax-free${mealCount ? ` · ${mealCount} × ` : " "}· not in gross</p>
       </div>
       ${filterBar()}
     </div>
@@ -430,12 +485,14 @@ function renderHours() {
               <tr>
                 <th>Date</th>
                 <th>Day</th>
-                <th>Worked</th>
+                <th>Clock</th>
+                <th>On site</th>
                 <th>Paid</th>
-                <th>1.0Ã—</th>
-                <th>1.5Ã—</th>
-                <th>2Ã—</th>
+                <th>Ordinary</th>
+                <th>OT1</th>
+                <th>OT2</th>
                 <th>Est. gross</th>
+                <th>Meal</th>
                 <th>Actual net</th>
                 <th></th>
               </tr>
@@ -447,13 +504,15 @@ function renderHours() {
                     <tr>
                       <td>${formatDay(s.date)}</td>
                       <td>${escapeHtml(dayTypeMeta(s.dayType).label)}</td>
-                      <td>${formatHours(s.afterBreak ?? s.workedHours)}${s.start && s.end ? ` <small class="muted">${s.start}â€“${s.end}</small>` : ""}</td>
-                      <td>${formatHours(s.paidHours)}</td>
-                      <td>${s.ordinaryHours ? formatHours(s.ordinaryHours) : "â€”"}</td>
-                      <td>${s.timeAndHalfHours ? formatHours(s.timeAndHalfHours) : "â€”"}</td>
-                      <td>${s.doubleHours ? formatHours(s.doubleHours) : "â€”"}</td>
+                      <td>${s.start && s.end ? `${formatClock(s.start)}–${formatClock(s.end)}` : "—"}</td>
+                      <td>${formatHM(s.workedHours)}</td>
+                      <td>${formatHM(s.paidHours)}</td>
+                      <td>${s.ordinaryHours ? formatHM(s.ordinaryHours) : "—"}</td>
+                      <td>${s.timeAndHalfHours ? formatHM(s.timeAndHalfHours) : "—"}</td>
+                      <td>${s.doubleHours ? formatHM(s.doubleHours) : "—"}</td>
                       <td>${AUD_EXACT.format(s.estGross)}</td>
-                      <td>${s.actualNet != null ? AUD_EXACT.format(s.actualNet) : "â€”"}</td>
+                      <td>${s.mealAmount ? AUD_EXACT.format(s.mealAmount) : "—"}</td>
+                      <td>${s.actualNet != null ? AUD_EXACT.format(s.actualNet) : "—"}</td>
                       <td><button class="row-link" type="button" data-edit-shift="${s.id}">Edit</button></td>
                     </tr>
                   `;
@@ -463,7 +522,7 @@ function renderHours() {
           </table></div>`
         : `<div class="empty">
             <h2>No shifts in this filter</h2>
-            <p>Log the hours from today. Pick weekday, Saturday overtime, Saturday ordinary, or Sunday. Est. gross is an estimate â€” payslips are take-home.</p>
+            <p>Log the hours from today. Pick weekday, Saturday overtime, Saturday ordinary, or Sunday. Est. gross is an estimate — payslips are take-home.</p>
             <button class="btn primary" type="button" data-open="shift">Log hours</button>
           </div>`
     }
@@ -480,8 +539,10 @@ function reconcile(slip) {
   );
   const logged = sumBy(rows, (s) => s.estGross);
   const hours = sumBy(rows, (s) => s.paidHours);
+  const meal = sumBy(rows, (s) => s.mealAmount);
+  // Gross to gross: payslip gross vs est. gross. Meal allowance is never in either.
   const delta = roundCents((Number(slip.gross || 0) - logged));
-  return { logged, hours, delta, days: rows.length };
+  return { logged, hours, delta, meal, meals: rows.filter((s) => s.mealAmount).length, days: rows.length };
 }
 
 function renderPayslips() {
@@ -490,7 +551,7 @@ function renderPayslips() {
     <div class="toolbar">
       <div>
         <h2 style="font-size:22px;margin:0">Payslips</h2>
-        <p class="muted">${rows.length} on file Â· take-home ${AUD_EXACT.format(sumBy(rows, (p) => p.net))}</p>
+        <p class="muted">${rows.length} on file · take-home ${AUD_EXACT.format(sumBy(rows, (p) => p.net))}</p>
       </div>
       ${filterBar()}
     </div>
@@ -504,22 +565,25 @@ function renderPayslips() {
                 let recHtml = "";
                 if (rec) {
                   if (!rec.days) {
-                    recHtml = `<p class="reconcile">No hours logged in ${formatDayShort(p.periodStart)}â€“${formatDayShort(p.periodEnd)}</p>`;
+                    recHtml = `<p class="reconcile">No hours logged in ${formatDayShort(p.periodStart)}–${formatDayShort(p.periodEnd)}</p>`;
                   } else if (Math.abs(rec.delta) < 0.5) {
                     recHtml = `<p class="reconcile ok">Actual gross matches ${rec.days} shift${rec.days === 1 ? "" : "s"} est. (${formatHours(rec.hours)})</p>`;
                   } else {
-                    recHtml = `<p class="reconcile off">Variance actual âˆ’ est. ${rec.delta >= 0 ? "+" : "âˆ’"}${AUD_EXACT.format(Math.abs(rec.delta))} Â· est. ${AUD_EXACT.format(rec.logged)}</p>`;
+                    recHtml = `<p class="reconcile off">Gross variance (slip − est.) ${rec.delta >= 0 ? "+" : "−"}${AUD_EXACT.format(Math.abs(rec.delta))} · est. gross ${AUD_EXACT.format(rec.logged)} · ${formatHours(rec.hours)} logged</p>`;
+                  }
+                  if (rec.days && rec.meals) {
+                    recHtml += `<p class="reconcile">Meal logged ${rec.meals} × = ${AUD_EXACT.format(rec.meal)} tax-free (not in gross)</p>`;
                   }
                 }
-                const period = p.periodStart && p.periodEnd ? `${formatDayShort(p.periodStart)} â€“ ${formatDayShort(p.periodEnd)}` : "Period not set";
+                const period = p.periodStart && p.periodEnd ? `${formatDayShort(p.periodStart)} – ${formatDayShort(p.periodEnd)}` : "Period not set";
                 return `
                   <button class="panel slip" type="button" data-edit-slip="${p.id}">
                     <p class="eyebrow">${escapeHtml(job?.name || "Job")}</p>
                     <h3>Paid ${formatDay(p.payDate)}</h3>
                     <p class="muted">${period}</p>
                     <p class="stat-value" style="font-size:28px">${AUD_EXACT.format(p.net || 0)}</p>
-                    <p class="muted">actual net Â· actual gross ${AUD_EXACT.format(p.gross || 0)}</p>
-                    <p class="muted">tax ${AUD_EXACT.format(p.tax || 0)} Â· super ${AUD_EXACT.format(p.super || 0)}${p.deductions ? ` Â· other ${AUD_EXACT.format(p.deductions)}` : ""}</p>
+                    <p class="muted">actual net · actual gross ${AUD_EXACT.format(p.gross || 0)}</p>
+                    <p class="muted">tax ${AUD_EXACT.format(p.tax || 0)} · super ${AUD_EXACT.format(p.super || 0)}${p.deductions ? ` · other ${AUD_EXACT.format(p.deductions)}` : ""}</p>
                     <span class="file-chip ${p.fileId ? "" : "missing"}">${p.fileId ? "PDF / file stored" : "No file attached"}</span>
                     ${recHtml}
                   </button>
@@ -541,7 +605,7 @@ function renderJobs() {
     <div class="toolbar">
       <div>
         <h2 style="font-size:22px;margin:0">Jobs</h2>
-        <p class="muted">Ordinary rate and default unpaid break. Weekday 8/10 OT, Saturday OT, rostered Saturday, and Sunday are chosen per shift.</p>
+        <p class="muted">Ordinary rate, fixed overtime rates, meal allowance and default unpaid break. Weekday, Saturday OT, rostered Saturday, and Sunday are chosen per shift.</p>
       </div>
       <button class="btn primary" type="button" data-open="job">Add job</button>
     </div>
@@ -549,27 +613,44 @@ function renderJobs() {
       ${state.jobs
         .map((j) => {
           const shifts = state.shifts.filter((s) => s.jobId === j.id);
+          const r = rulesOf(j);
           return `
             <button class="panel job-card" type="button" data-edit-job="${j.id}">
               <span class="dot" style="background:${j.color}"></span>
               <h3 style="margin:10px 0 4px">${escapeHtml(j.name)}</h3>
               <p class="stat-value" style="font-size:28px">${AUD_EXACT.format(j.rate)} <span style="font-size:14px;color:var(--muted);font-family:'IBM Plex Sans',sans-serif;letter-spacing:0;font-weight:500">/hr</span></p>
-              <p class="muted">${j.breakMins} min unpaid break Â· ${shifts.length} shift${shifts.length === 1 ? "" : "s"}</p>
+              <p class="muted">First ${r.ordHours}h ordinary · next ${r.ot1Hours}h @ ${rateText(r.ot1Rate)} · then ${rateText(r.ot2Rate)}</p>
+              <p class="muted">Meal ${r.mealAllowance ? `${AUD_EXACT.format(r.mealAllowance)} tax-free` : "none"} · ${j.breakMins} min unpaid break · ${shifts.length} shift${shifts.length === 1 ? "" : "s"}</p>
             </button>
           `;
         })
         .join("")}
     </div>
+    <article class="panel drive-panel" style="margin-top:16px">
+      <div class="panel-head">
+        <div>
+          <h2>Save to Google Drive</h2>
+          <p>Saves a private copy to your Drive. Nothing is uploaded to the website.</p>
+          <p class="helper">Shares 3 files from this phone: the full backup, the hours CSV and a readable summary. Pick <b>Drive</b> in the share sheet.</p>
+        </div>
+        <button class="btn primary drive-btn" type="button" data-drive>Save to Google Drive</button>
+      </div>
+    </article>
     <div class="jobs-tools">
       <button class="btn" type="button" id="export-json">Export backup</button>
       <button class="btn" type="button" id="export-csv">Export hours CSV</button>
       <label class="btn" style="cursor:pointer">
         Import backup
-        <input id="import-json" type="file" accept="application/json" hidden />
+        <input id="import-json" type="file" accept="application/json,.json,text/plain,.txt" hidden />
       </label>
     </div>
-    <p class="note">Backup includes payslip files. Keep a copy somewhere safe â€” clearing this browser will wipe the ledger.</p>
+    <p class="note">Backup includes payslip files. Keep a copy somewhere safe — clearing this browser will wipe the ledger.</p>
   `;
+}
+
+function rateText(n) {
+  const v = Number(n) || 0;
+  return `$${v.toFixed(4).replace(/0{1,2}$/, "")}`;
 }
 
 function fillJobSelects(selected) {
@@ -616,20 +697,53 @@ function currentWorkedHours() {
   );
 }
 
+const RULE_FIELDS = [
+  ["rate", "#shift-rate"],
+  ["ot1Rate", "#shift-ot1-rate"],
+  ["ot2Rate", "#shift-ot2-rate"],
+  ["ordHours", "#shift-ord-hours"],
+  ["ot1Hours", "#shift-ot1-hours"],
+  ["mealAllowance", "#shift-meal-rate"],
+];
+
+function fillShiftRules(rules) {
+  const r = normalizeRules(rules);
+  for (const [key, sel] of RULE_FIELDS) document.querySelector(sel).value = roundRule(r[key]);
+}
+
+function roundRule(n) {
+  return Math.round((Number(n) || 0) * 10000) / 10000;
+}
+
+function readShiftRules() {
+  const out = {};
+  for (const [key, sel] of RULE_FIELDS) out[key] = Number(document.querySelector(sel).value) || 0;
+  return normalizeRules(out);
+}
+
 function updateShiftPreview() {
   const worked = currentWorkedHours();
   const brk = Number(document.querySelector("#shift-break").value) || 0;
-  const rate = Number(document.querySelector("#shift-rate").value) || 0;
-  const calc = shiftPay(worked, brk, rate, state.dayType);
-  document.querySelector("#shift-worked").textContent = formatHours(calc.afterBreak);
-  document.querySelector("#shift-paid").textContent = formatHours(calc.paidHours);
+  const rules = readShiftRules();
+  const calc = shiftPay(worked, brk, rules, state.dayType);
+  const mealBox = document.querySelector("#shift-meal");
+  if (!state.mealTouched) mealBox.checked = mealDefault(calc.paidHours, rules);
+  const mealOn = mealBox.checked && rules.mealAllowance > 0;
+  document.querySelector("#shift-meal-label").textContent = `Meal allowance ${AUD_EXACT.format(rules.mealAllowance)}`;
+  document.querySelector("#shift-onsite").textContent = formatHM(calc.worked);
+  document.querySelector("#shift-paid").textContent = formatHM(calc.paidHours);
   document.querySelector("#shift-gross").textContent = AUD_EXACT.format(calc.estGross);
+  document.querySelector("#shift-meal-preview").textContent = mealOn
+    ? `+ ${AUD_EXACT.format(rules.mealAllowance)} meal (tax-free, not in gross)`
+    : "No meal allowance";
   let note = formatSplit(calc);
-  if (calc.minApplied) note += ` Â· ${formatHours(calc.paidHours)} minimum applied (worked ${formatHours(calc.afterBreak)})`;
+  if (calc.minApplied) note += ` · ${formatHours(calc.paidHours)} minimum applied (worked ${formatHours(calc.afterBreak)})`;
   document.querySelector("#shift-ot-note").textContent = calc.paidHours
     ? note
-    : "1.0Ã— / 1.5Ã— / 2Ã— split";
-  return { ...calc, rate, brk };
+    : "Ordinary / OT1 / OT2 split";
+  document.querySelector("#shift-rules-summary").textContent =
+    `First ${rules.ordHours}h @ ${rateText(rules.rate)} · next ${rules.ot1Hours}h @ ${rateText(rules.ot1Rate)} · then ${rateText(rules.ot2Rate)}`;
+  return { ...calc, rules, rate: rules.rate, brk, meal: mealOn };
 }
 
 function openShift(shift) {
@@ -637,8 +751,13 @@ function openShift(shift) {
   document.querySelector("#shift-id").value = shift?.id || "";
   const date = shift?.date || todayISO();
   document.querySelector("#shift-date").value = date;
-  document.querySelector("#shift-break").value = shift?.breakMins ?? state.jobs[0]?.breakMins ?? 30;
-  document.querySelector("#shift-rate").value = shift?.rate ?? state.jobs[0]?.rate ?? 41.21;
+  const job = jobById(shift?.jobId) || state.jobs[0];
+  document.querySelector("#shift-break").value = shift?.breakMins ?? job?.breakMins ?? 30;
+  // Existing shifts keep the rates they were logged with; new shifts take the job's.
+  const rules = shift ? { ...rulesOf(shift), mealAllowance: Number(shift.mealRate) || 0 } : rulesOf(job);
+  fillShiftRules(rules);
+  state.mealTouched = Boolean(shift);
+  document.querySelector("#shift-meal").checked = Boolean(shift?.meal);
   document.querySelector("#shift-notes").value = shift?.notes || "";
   document.querySelector("#shift-start").value = shift?.start || "";
   document.querySelector("#shift-end").value = shift?.end || "";
@@ -677,7 +796,7 @@ function openPayslip(slip) {
   state.pendingFile = null;
   state.existingFileName = slip?.fileName || "";
   els.dropLabel.textContent = slip?.fileName
-    ? `On file: ${slip.fileName} â€” drop to replace`
+    ? `On file: ${slip.fileName} — drop to replace`
     : "Drop a PDF or photo of the payslip";
   document.querySelector("#slip-delete").hidden = !slip;
   document.querySelector("#slip-view").hidden = !slip?.fileId;
@@ -689,7 +808,15 @@ function openPayslip(slip) {
 function openJob(job) {
   document.querySelector("#job-id").value = job?.id || "";
   document.querySelector("#job-name").value = job?.name || "";
-  document.querySelector("#job-rate").value = job?.rate ?? 41.21;
+  const r = job ? rulesOf(job) : normalizeRules(BEVCHAIN_RULES);
+  document.querySelector("#job-rate").value = roundRule(r.rate);
+  document.querySelector("#job-ot1-rate").value = roundRule(r.ot1Rate);
+  document.querySelector("#job-ot2-rate").value = roundRule(r.ot2Rate);
+  document.querySelector("#job-ord-hours").value = roundRule(r.ordHours);
+  document.querySelector("#job-ot1-hours").value = roundRule(r.ot1Hours);
+  document.querySelector("#job-meal").value = roundRule(r.mealAllowance);
+  document.querySelector("#job-apply").checked = false;
+  document.querySelector("#job-apply-wrap").hidden = !job;
   document.querySelector("#job-break").value = job?.breakMins ?? 30;
   document.querySelector("#job-color").value = job?.color || "#e2a336";
   document.querySelector("#job-delete").hidden = !job;
@@ -701,7 +828,7 @@ async function saveShift(event) {
   event.preventDefault();
   const preview = updateShiftPreview();
   if (preview.paidHours <= 0) {
-    toast("Paid hours came out at zero â€” check time on site and the break.");
+    toast("Paid hours came out at zero — check time on site and the break.");
     return;
   }
   const id = document.querySelector("#shift-id").value || db.uid();
@@ -720,9 +847,15 @@ async function saveShift(event) {
     ordinaryHours: preview.ordinary,
     timeAndHalfHours: preview.timeAndHalf,
     doubleHours: preview.double,
-    rate: preview.rate,
+    rate: preview.rules.rate,
+    ot1Rate: preview.rules.ot1Rate,
+    ot2Rate: preview.rules.ot2Rate,
+    ordHours: preview.rules.ordHours,
+    ot1Hours: preview.rules.ot1Hours,
     estGross: preview.estGross,
     gross: preview.estGross,
+    meal: preview.meal,
+    mealRate: preview.rules.mealAllowance,
     actualGross: moneyOrNull("#shift-actual-gross"),
     actualNet: moneyOrNull("#shift-actual-net"),
     actualTax: moneyOrNull("#shift-actual-tax"),
@@ -734,7 +867,7 @@ async function saveShift(event) {
   };
   await db.put("shifts", record);
   els.shiftDlg.close();
-  toast(`Saved ${formatHours(record.paidHours)} Â· est. ${AUD_EXACT.format(record.estGross)}`);
+  toast(`Saved ${formatHours(record.paidHours)} · est. ${AUD_EXACT.format(record.estGross)}${record.meal ? ` + ${AUD_EXACT.format(record.mealRate)} meal` : ""}`);
   await reload();
 }
 
@@ -786,13 +919,36 @@ async function saveJob(event) {
     id,
     name: document.querySelector("#job-name").value.trim() || "Job",
     rate: Number(document.querySelector("#job-rate").value) || 0,
+    ot1Rate: Number(document.querySelector("#job-ot1-rate").value) || 0,
+    ot2Rate: Number(document.querySelector("#job-ot2-rate").value) || 0,
+    ordHours: Number(document.querySelector("#job-ord-hours").value) || 0,
+    ot1Hours: Number(document.querySelector("#job-ot1-hours").value) || 0,
+    mealAllowance: Number(document.querySelector("#job-meal").value) || 0,
     breakMins: Number(document.querySelector("#job-break").value) || 0,
     color: document.querySelector("#job-color").value || "#e2a336",
     createdAt: existing?.createdAt || new Date().toISOString(),
   };
   await db.put("jobs", record);
+  let applied = 0;
+  if (existing && document.querySelector("#job-apply").checked) {
+    const raw = await db.all("shifts");
+    for (const shift of raw.filter((x) => x.jobId === id)) {
+      const next = withPay({
+        ...shift,
+        rate: record.rate,
+        ot1Rate: record.ot1Rate,
+        ot2Rate: record.ot2Rate,
+        ordHours: record.ordHours,
+        ot1Hours: record.ot1Hours,
+        mealRate: record.mealAllowance,
+        updatedAt: new Date().toISOString(),
+      });
+      await db.put("shifts", next);
+      applied += 1;
+    }
+  }
   els.jobDlg.close();
-  toast(`Saved ${record.name}`);
+  toast(applied ? `Saved ${record.name} · rates applied to ${applied} shift${applied === 1 ? "" : "s"}` : `Saved ${record.name}`);
   await reload();
 }
 
@@ -823,7 +979,7 @@ async function deleteJob() {
   if (!id) return;
   const used = state.shifts.some((s) => s.jobId === id) || state.payslips.some((p) => p.jobId === id);
   if (used) {
-    toast("Move or delete this jobâ€™s shifts and payslips first.");
+    toast("Move or delete this job’s shifts and payslips first.");
     return;
   }
   if (state.jobs.length === 1) {
@@ -872,6 +1028,77 @@ function downloadBlob(name, blob) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/* ---------- Save to Google Drive (Web Share API, no upload to the website) ---------- */
+
+async function buildDriveFiles() {
+  const stamp = todayISO();
+  const payload = await db.exportBackup();
+  const [rawShifts, jobs, payslips] = await Promise.all([db.all("shifts"), db.all("jobs"), db.all("payslips")]);
+  const json = new File([JSON.stringify(payload)], `pay-ledger-backup-${stamp}.json`, { type: "application/json" });
+  const csv = new File(["\ufeff" + db.shiftsToCsv(rawShifts, jobs)], `pay-ledger-hours-${stamp}.csv`, { type: "text/csv" });
+  const html = new File([buildSummaryHtml({ jobs, shifts: rawShifts, payslips, now: new Date() })], `pay-ledger-summary-${stamp}.html`, {
+    type: "text/html",
+  });
+  return [json, csv, html];
+}
+
+function driveStatus(html) {
+  document.querySelector("#drive-status").innerHTML = html;
+}
+
+function driveFileList(files) {
+  document.querySelector("#drive-files").innerHTML = files
+    .map((f) => `<li><b>${escapeHtml(f.name)}</b> <small class="muted">${Math.max(1, Math.round(f.size / 1024))} KB</small></li>`)
+    .join("");
+}
+
+const DRIVE_FALLBACK_NOTE =
+  "This browser can’t share files, so they were downloaded instead. Open the Google Drive app, make a folder called <b>Pay Ledger</b>, and upload these files into it.";
+
+async function saveToDrive() {
+  els.driveDlg.showModal();
+  document.querySelector("#drive-retry").hidden = true;
+  driveStatus("Preparing your files…");
+  driveFileList([]);
+  const files = await buildDriveFiles();
+  state.driveFiles = files;
+  driveFileList(files);
+  const result = await shareOrDownload(files, {
+    title: "Pay Ledger backup",
+    text: "Pay Ledger private copy. Save to Google Drive → Pay Ledger folder.",
+  });
+  handleDriveResult(result);
+}
+
+function handleDriveResult(result) {
+  if (result.method === "share") {
+    driveFileList(result.files);
+    driveStatus("Sent to the share sheet. If you picked Drive, choose the <b>Pay Ledger</b> folder and tap Upload.");
+    toast("Shared · pick Drive to save");
+  } else if (result.method === "cancelled") {
+    driveStatus("Share cancelled. Nothing was saved.");
+    document.querySelector("#drive-retry").hidden = false;
+  } else if (result.method === "retry") {
+    driveStatus("Files are ready. Tap <b>Share now</b> to open the share sheet.");
+    document.querySelector("#drive-retry").hidden = false;
+  } else {
+    driveStatus(DRIVE_FALLBACK_NOTE);
+    toast("Files downloaded");
+  }
+  els.driveDlg.dataset.result = result.method;
+}
+
+async function retryDriveShare() {
+  const files = state.driveFiles || (await buildDriveFiles());
+  const result = await shareOrDownload(files, { title: "Pay Ledger backup" });
+  if (result.method === "retry") {
+    for (const f of files) downloadFile(f);
+    handleDriveResult({ method: "download", files });
+    return;
+  }
+  handleDriveResult(result);
+}
+
 async function exportJson() {
   const payload = await db.exportBackup();
   downloadBlob(
@@ -881,8 +1108,8 @@ async function exportJson() {
   toast("Backup downloaded");
 }
 
-function exportCsv() {
-  const csv = db.shiftsToCsv(state.shifts, state.jobs);
+async function exportCsv() {
+  const csv = "\ufeff" + db.shiftsToCsv(await db.all("shifts"), state.jobs);
   downloadBlob(`pay-ledger-hours-${todayISO()}.csv`, new Blob([csv], { type: "text/csv" }));
   toast("Hours CSV downloaded");
 }
@@ -921,7 +1148,7 @@ function closeDialogs(from) {
 function onJobChange() {
   const job = jobById(document.querySelector("#shift-job").value);
   if (!job) return;
-  document.querySelector("#shift-rate").value = job.rate;
+  fillShiftRules(rulesOf(job));
   document.querySelector("#shift-break").value = job.breakMins;
   updateShiftPreview();
 }
@@ -999,6 +1226,7 @@ document.addEventListener("change", (event) => {
 });
 
 document.addEventListener("input", (event) => {
+  if (event.target.id === "shift-meal") state.mealTouched = true;
   if (event.target.closest("#shift-form") && !event.target.id.startsWith("shift-actual")) {
     updateShiftPreview();
   }
@@ -1033,7 +1261,12 @@ document.querySelector("#slip-view").addEventListener("click", () => {
 
 document.addEventListener("click", (event) => {
   if (event.target.id === "export-json") exportJson().catch((err) => toast(err.message));
-  if (event.target.id === "export-csv") exportCsv();
+  if (event.target.id === "export-csv") exportCsv().catch((err) => toast(err.message));
+  if (event.target.closest("[data-drive]")) saveToDrive().catch((err) => {
+    console.error(err);
+    driveStatus(`Could not prepare the files: ${escapeHtml(err.message)}`);
+  });
+  if (event.target.id === "drive-retry") retryDriveShare().catch((err) => toast(err.message));
 });
 
 ["dragenter", "dragover"].forEach((name) => {
@@ -1063,6 +1296,17 @@ window.addEventListener("resize", () => {
   resizeTimer = setTimeout(() => {
     if (state.view === "overview") renderOverview();
   }, 150);
+});
+
+let upgradeWasBlocked = false;
+window.addEventListener("pay-ledger:upgrade-blocked", () => {
+  upgradeWasBlocked = true;
+  els.toast.textContent = "Updating your ledger… close any other Pay Ledger tabs to finish.";
+  els.toast.hidden = false;
+});
+
+window.addEventListener("pay-ledger:upgraded-elsewhere", () => {
+  toast("Pay Ledger was updated in another tab. Reload this page.");
 });
 
 window.addEventListener("hashchange", () => {
@@ -1098,14 +1342,14 @@ async function applyChronaSeed() {
     job = {
       id: db.uid(),
       name: "BevChain",
-      rate: 41.21,
+      ...BEVCHAIN_RULES,
       breakMins: 30,
       color: "#e2a336",
       createdAt: new Date().toISOString(),
     };
     await db.put("jobs", job);
   } else if (job.name === "Job 1") {
-    job = { ...job, name: "BevChain", rate: job.rate || 41.21, breakMins: job.breakMins ?? 30 };
+    job = { ...BEVCHAIN_RULES, ...job, name: "BevChain", rate: job.rate || 41.21, breakMins: job.breakMins ?? 30 };
     await db.put("jobs", job);
   }
 
@@ -1115,14 +1359,14 @@ async function applyChronaSeed() {
     const date = row.date;
     const workedHours = Number(row.workedHours);
     const breakMins = Number(row.breakMins ?? 30);
-    const rate = Number(row.rate ?? job.rate ?? 41.21);
+    const rules = { ...rulesOf(job), rate: Number(row.rate ?? job.rate ?? 41.21) };
     const dayType = row.dayType || suggestDayType(date);
     if (!date || !Number.isFinite(workedHours)) continue;
     const dup = existing.some(
       (s) => s.date === date && Number(s.workedHours) === workedHours && Number(s.breakMins) === breakMins,
     );
     if (dup) continue;
-    const calc = shiftPay(workedHours, breakMins, rate, dayType);
+    const calc = shiftPay(workedHours, breakMins, rules, dayType);
     const record = {
       id: db.uid(),
       jobId: job.id,
@@ -1137,9 +1381,15 @@ async function applyChronaSeed() {
       ordinaryHours: calc.ordinary,
       timeAndHalfHours: calc.timeAndHalf,
       doubleHours: calc.double,
-      rate,
+      rate: rules.rate,
+      ot1Rate: rules.ot1Rate,
+      ot2Rate: rules.ot2Rate,
+      ordHours: rules.ordHours,
+      ot1Hours: rules.ot1Hours,
       estGross: calc.estGross,
       gross: calc.estGross,
+      meal: mealDefault(calc.paidHours, rules),
+      mealRate: rules.mealAllowance,
       actualGross: null,
       actualNet: null,
       notes: row.note || row.notes || "Chrona",

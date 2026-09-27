@@ -6,6 +6,7 @@
   "description": "Log hours, store payslips, and track income over time.",
   "scripts": {
     "start": "python -m http.server 4174",
-    "test": "node test-money.js"
+    "test": "node check-encoding.mjs && node test-money.js && node test-pay.mjs",
+    "test:e2e": "node tests/e2e.mjs"
   }
 }

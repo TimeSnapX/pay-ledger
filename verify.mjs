@@ -3,14 +3,17 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const require = createRequire(path.join("C:\\Users\\kenny\\bitmail", "package.json"));
-const { chromium } = require("playwright");
+const require = createRequire(path.join(process.env.PLAYWRIGHT_DIR || "C:\\Users\\kenny\\bitmail", "package.json"));
+let pw;
+try { pw = require("playwright"); } catch { pw = require("playwright-core"); }
+const { chromium } = pw;
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const out = path.join(root, "test-results");
 await mkdir(out, { recursive: true });
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, ...(process.env.CHROME ? { executablePath: process.env.CHROME } : {}) });
+const BASE = process.env.BASE || "http://localhost:4174";
 const errors = [];
 
 async function shot(page, name) {
@@ -33,7 +36,7 @@ async function runDesktop() {
   });
   const page = await context.newPage();
   listen(page);
-  await page.goto("http://localhost:4174", { waitUntil: "networkidle" });
+  await page.goto(BASE, { waitUntil: "networkidle" });
   await page.waitForSelector("h1");
   const title = await page.locator("h1").first().innerText();
   if (!/Pay Ledger/i.test(title)) errors.push("title: " + title);
@@ -47,13 +50,13 @@ async function runDesktop() {
   await page.fill("#shift-h", "11");
   await page.fill("#shift-m", "45");
   await page.fill("#shift-break", "30");
-  await page.waitForFunction(() => document.querySelector("#shift-paid")?.textContent.includes("11h 15m"));
+  await page.waitForFunction(() => document.querySelector("#shift-paid")?.textContent.includes("11h15"));
   const paid = await page.locator("#shift-paid").innerText();
   const gross = await page.locator("#shift-gross").innerText();
-  if (paid !== "11h 15m") errors.push("paid preview: " + paid);
-  if (!gross.includes("556.34")) errors.push("gross preview: " + gross);
+  if (paid !== "11h15") errors.push("paid preview: " + paid);
+  if (!gross.includes("532.93")) errors.push("gross preview: " + gross);
   const otNote = await page.locator("#shift-ot-note").innerText();
-  if (!/8h @ 1×/.test(otNote) || !/2h @ 1.5×/.test(otNote) || !/1h 15m @ 2×/.test(otNote)) {
+  if (!/7h36 @ \$41\.21/.test(otNote) || !/2h @ \$52\.75/.test(otNote) || !/1h39 @ \$69\.23/.test(otNote)) {
     errors.push("ot note: " + otNote);
   }
   await shot(page, "02-log-hours-dialog");
@@ -85,19 +88,19 @@ async function runDesktop() {
   await page.click('[data-day-type="weekday"]');
   await page.fill("#shift-h", "11");
   await page.fill("#shift-m", "45");
-  await page.waitForFunction(() => document.querySelector("#shift-gross")?.textContent.includes("556.34"));
+  await page.waitForFunction(() => document.querySelector("#shift-gross")?.textContent.includes("532.93"));
   await page.click('#shift-form button[type="submit"]');
   await page.waitForSelector(".toast:not([hidden])");
   await page.waitForSelector(".stat-value");
   const weekGross = await page.locator(".stat-card .stat-value").first().innerText();
-  if (!weekGross.includes("556.34")) errors.push("week card: " + weekGross);
+  if (!weekGross.includes("532.93")) errors.push("week card: " + weekGross);
   await shot(page, "03-overview-after-shift");
 
   await page.click('.tab[data-view="hours"]');
   await page.waitForSelector("table");
   const table = await page.locator("table").innerText();
-  if (!/11h 15m/.test(table) || !/\$556.34/.test(table)) errors.push("hours table: " + table.slice(0, 200));
-  if (!/1h 15m/.test(table)) errors.push("double time missing from table: " + table.slice(0, 280));
+  if (!/11h15/.test(table) || !/\$532.93/.test(table)) errors.push("hours table: " + table.slice(0, 200));
+  if (!/1h39/.test(table)) errors.push("OT2 missing from table: " + table.slice(0, 280));
   await shot(page, "04-hours-table");
 
   await page.click('[data-open="payslip"]');
@@ -151,7 +154,7 @@ async function runDesktop() {
   await page.click('[data-mode="clock"]');
   await page.fill("#shift-start", "05:30");
   await page.fill("#shift-end", "17:15");
-  await page.waitForFunction(() => document.querySelector("#shift-paid")?.textContent.includes("11h 15m"));
+  await page.waitForFunction(() => document.querySelector("#shift-paid")?.textContent.includes("11h15"));
   await page.click('#shift-form button[type="submit"]');
   await page.waitForSelector(".toast:not([hidden])");
   await shot(page, "09-hours-after-clock-edit");
@@ -170,7 +173,7 @@ async function runMobile() {
   });
   const page = await context.newPage();
   listen(page);
-  await page.goto("http://localhost:4174", { waitUntil: "networkidle" });
+  await page.goto(BASE, { waitUntil: "networkidle" });
   await page.waitForSelector("h1");
   await shot(page, "10-mobile-overview");
   await page.click('.tab[data-view="hours"]');

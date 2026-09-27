@@ -334,6 +334,50 @@ footer {
   text-align: right;
 }
 .row .money small { display: block; font-weight: 400; }
+.row small.shift-times { display: block; color: var(--ink); font-variant-numeric: tabular-nums; }
+.row small.meal-flag { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; }
+.row small.meal-flag.on { color: var(--mint); }
+.meal-flag .tick {
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1.5px solid currentColor;
+  display: inline-grid;
+  place-items: center;
+}
+.meal-flag.on .tick { background: var(--mint); border-color: var(--mint); }
+.meal-flag.on .tick::after {
+  content: "";
+  width: 3px;
+  height: 7px;
+  border: solid #0b0c0a;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+.row .money small.meal-amt { color: var(--mint); }
+.meal-sub { color: var(--mint) !important; }
+.meal-note { color: var(--mint) !important; }
+
+label.check {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(11, 12, 10, 0.5);
+  cursor: pointer;
+}
+label.check[hidden] { display: none; }
+label.check input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--mint-deep); flex: none; }
+label.check b { display: block; font-size: 14px; font-weight: 600; }
+label.check small { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; margin-top: 2px; }
+
+.drive-panel { margin-top: 14px; }
+.drive-panel .panel-head { flex-wrap: wrap; }
+.drive-files { list-style: none; padding: 0; margin: 14px 0 6px; display: grid; gap: 6px; }
+.drive-files li { padding: 8px 12px; border: 1px solid var(--line); border-radius: 12px; font-size: 13px; word-break: break-all; }
+.drive-status { color: var(--ink); font-size: 14px; line-height: 1.5; min-height: 1.5em; }
 
 .toolbar {
   display: flex;

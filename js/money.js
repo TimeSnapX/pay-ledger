@@ -141,6 +141,55 @@ export function paidHours(timeOnSite, breakMins) {
 
 export const WEEKEND_MIN_HOURS = 4;
 
+/**
+ * BevChain Eagle Farm (Randstad casual) pay rules, from the 14–20 Sep 2026 payslip.
+ * OT rates are FIXED dollar rates, not multiples of the ordinary rate: $41.21
+ * already includes casual loading, so 1.5× / 2× of it would overpay.
+ */
+export const BEVCHAIN_RULES = Object.freeze({
+  rate: 41.21,
+  ot1Rate: 52.75,
+  ot2Rate: 69.23,
+  ordHours: 7.6,
+  ot1Hours: 2,
+  mealAllowance: 21.15,
+});
+
+/** Pre-v2 behaviour: 8h ordinary, next 2h @ 1.5×, then 2× of the ordinary rate. */
+export function legacyRules(rate) {
+  const r = Number(rate) || 0;
+  return { rate: r, ot1Rate: r * 1.5, ot2Rate: r * 2, ordHours: 8, ot1Hours: 2, mealAllowance: 0 };
+}
+
+function num(v, fallback) {
+  const n = Number(v);
+  return v === "" || v == null || !Number.isFinite(n) ? fallback : n;
+}
+
+/**
+ * Normalise pay rules. A bare number keeps the old (v1) 8h / 1.5× / 2× behaviour
+ * so older callers and saved data compute exactly as before.
+ */
+export function normalizeRules(input) {
+  if (input == null || typeof input !== "object") return legacyRules(input);
+  const rate = num(input.rate, 0);
+  return {
+    rate,
+    ot1Rate: num(input.ot1Rate, rate * 1.5),
+    ot2Rate: num(input.ot2Rate, rate * 2),
+    ordHours: Math.max(0, num(input.ordHours, 8)),
+    ot1Hours: Math.max(0, num(input.ot1Hours, 2)),
+    mealAllowance: Math.max(0, num(input.mealAllowance, 0)),
+  };
+}
+
+/** Pull the pay rules stored on a job or a shift record. */
+export function rulesOf(record) {
+  if (!record) return legacyRules(0);
+  if (record.ot1Rate == null && record.ordHours == null) return legacyRules(record.rate);
+  return normalizeRules(record);
+}
+
 export const DAY_TYPES = [
   { id: "weekday", label: "Weekday", hint: "Mon–Fri" },
   { id: "sat-ot", label: "Saturday overtime", hint: "BevChain / Road Transport" },
@@ -161,18 +210,42 @@ export function suggestDayType(iso) {
   return "weekday";
 }
 
-/** Weekday bands: ordinary to 8h, 1.5× from 8–10h, 2× after 10h. */
-export function splitOt(paid) {
+/** Weekday bands: ordinary to `ordHours`, OT1 for the next `ot1Hours`, OT2 after that. */
+export function splitOt(paid, ordHours = 8, ot1Hours = 2) {
   const p = Math.max(0, Number(paid) || 0);
   return {
-    ordinary: roundCents(Math.min(p, 8)),
-    timeAndHalf: roundCents(Math.min(Math.max(0, p - 8), 2)),
-    double: roundCents(Math.max(0, p - 10)),
+    ordinary: roundCents(Math.min(p, ordHours)),
+    timeAndHalf: roundCents(Math.min(Math.max(0, p - ordHours), ot1Hours)),
+    double: roundCents(Math.max(0, p - ordHours - ot1Hours)),
   };
 }
 
-export function shiftPay(timeOnSite, breakMins, rate, dayType = "weekday") {
-  const r = Number(rate) || 0;
+/** One pay line, rounded to cents the way a payslip line is. */
+export function lineAmount(hours, rate) {
+  return roundCents((Number(hours) || 0) * (Number(rate) || 0));
+}
+
+/** Gross from hours per band, each line rounded to cents (as on the payslip). */
+export function payFromHours({ ordinary = 0, ot1 = 0, ot2 = 0 }, rules) {
+  const r = normalizeRules(rules);
+  const lines = [
+    { key: "ordinary", hours: ordinary, rate: r.rate, amount: lineAmount(ordinary, r.rate) },
+    { key: "ot1", hours: ot1, rate: r.ot1Rate, amount: lineAmount(ot1, r.ot1Rate) },
+    { key: "ot2", hours: ot2, rate: r.ot2Rate, amount: lineAmount(ot2, r.ot2Rate) },
+  ];
+  return { lines, gross: roundCents(lines.reduce((a, l) => a + l.amount, 0)) };
+}
+
+/**
+ * Estimated pay for one shift.
+ * `rules` is either a number (v1: ordinary rate, 8h/10h bands at 1.5×/2×) or an
+ * object { rate, ot1Rate, ot2Rate, ordHours, ot1Hours }.
+ * Weekday uses the fixed OT1/OT2 dollar rates. Saturday / Sunday keep the
+ * original multiplier logic (1.5× / 2× of the ordinary rate) — no better data yet.
+ * Meal allowance is NOT part of this: it is tax-free and never in gross.
+ */
+export function shiftPay(timeOnSite, breakMins, rules, dayType = "weekday") {
+  const r = normalizeRules(rules);
   const worked = roundCents(Math.max(0, Number(timeOnSite) || 0));
   const afterBreak = paidHours(worked, breakMins);
   const type = DAY_TYPES.some((t) => t.id === dayType) ? dayType : "weekday";
@@ -182,39 +255,48 @@ export function shiftPay(timeOnSite, breakMins, rate, dayType = "weekday") {
   let timeAndHalf = 0;
   let double = 0;
   let minApplied = false;
+  let ot1Rate = r.ot1Rate;
+  let ot2Rate = r.ot2Rate;
 
   if (afterBreak <= 0) {
     paid = 0;
   } else if (type === "weekday") {
-    const split = splitOt(afterBreak);
+    const split = splitOt(afterBreak, r.ordHours, r.ot1Hours);
     ordinary = split.ordinary;
     timeAndHalf = split.timeAndHalf;
     double = split.double;
-  } else if (type === "sat-ot") {
-    if (afterBreak < WEEKEND_MIN_HOURS) {
-      paid = WEEKEND_MIN_HOURS;
-      minApplied = true;
-      timeAndHalf = 2;
-      double = 2;
-    } else {
-      timeAndHalf = roundCents(Math.min(2, afterBreak));
-      double = roundCents(Math.max(0, afterBreak - 2));
+  } else {
+    ot1Rate = r.rate * 1.5;
+    ot2Rate = r.rate * 2;
+    if (type === "sat-ot") {
+      if (afterBreak < WEEKEND_MIN_HOURS) {
+        paid = WEEKEND_MIN_HOURS;
+        minApplied = true;
+        timeAndHalf = 2;
+        double = 2;
+      } else {
+        timeAndHalf = roundCents(Math.min(2, afterBreak));
+        double = roundCents(Math.max(0, afterBreak - 2));
+      }
+    } else if (type === "sat-ordinary") {
+      if (afterBreak < WEEKEND_MIN_HOURS) {
+        paid = WEEKEND_MIN_HOURS;
+        minApplied = true;
+      }
+      timeAndHalf = paid;
+    } else if (type === "sunday") {
+      if (afterBreak < WEEKEND_MIN_HOURS) {
+        paid = WEEKEND_MIN_HOURS;
+        minApplied = true;
+      }
+      double = paid;
     }
-  } else if (type === "sat-ordinary") {
-    if (afterBreak < WEEKEND_MIN_HOURS) {
-      paid = WEEKEND_MIN_HOURS;
-      minApplied = true;
-    }
-    timeAndHalf = paid;
-  } else if (type === "sunday") {
-    if (afterBreak < WEEKEND_MIN_HOURS) {
-      paid = WEEKEND_MIN_HOURS;
-      minApplied = true;
-    }
-    double = paid;
   }
 
-  const estGross = roundCents(ordinary * r + timeAndHalf * r * 1.5 + double * r * 2);
+  const pay = payFromHours(
+    { ordinary, ot1: timeAndHalf, ot2: double },
+    { rate: r.rate, ot1Rate, ot2Rate },
+  );
   return {
     dayType: type,
     worked,
@@ -223,25 +305,85 @@ export function shiftPay(timeOnSite, breakMins, rate, dayType = "weekday") {
     ordinary,
     timeAndHalf,
     double,
-    estGross,
+    ordinaryRate: r.rate,
+    ot1Rate,
+    ot2Rate,
+    lines: pay.lines,
+    estGross: pay.gross,
     minApplied,
   };
 }
 
-export function computeGross(hours, rate, dayType = "weekday") {
-  return shiftPay(hours, 0, rate, dayType).estGross;
+export function computeGross(hours, rules, dayType = "weekday") {
+  return shiftPay(hours, 0, rules, dayType).estGross;
 }
 
+/** Meal allowance defaults on when paid hours are over the ordinary day. */
+export function mealDefault(paid, rules) {
+  const r = normalizeRules(rules);
+  return r.mealAllowance > 0 && (Number(paid) || 0) > r.ordHours + 1e-9;
+}
+
+/** Tax-free meal allowance for a stored shift. Never part of gross. */
+export function mealAmount(shift) {
+  if (!shift || !shift.meal) return 0;
+  return roundCents(Number(shift.mealRate) || 0);
+}
+
+function money2(n) {
+  const v = Number(n) || 0;
+  const s = v.toFixed(4).replace(/0{1,2}$/, "");
+  return `$${s}`;
+}
+
+/**
+ * "7h36 @ $41.21 · 2h @ $52.75 · 1h39 @ $69.23" when rates are known,
+ * "2h @ 1.5× · 2h @ 2×" for multiplier-based (weekend / v1) splits.
+ */
 export function formatSplit(parts) {
   const bits = [];
-  if (parts.ordinary) bits.push(`${formatHours(parts.ordinary)} @ 1×`);
-  if (parts.timeAndHalf) bits.push(`${formatHours(parts.timeAndHalf)} @ 1.5×`);
-  if (parts.double) bits.push(`${formatHours(parts.double)} @ 2×`);
+  const useDollars = parts.dayType === "weekday" && parts.ot1Rate != null && parts.ordinaryRate;
+  if (useDollars) {
+    if (parts.ordinary) bits.push(`${formatHM(parts.ordinary)} @ ${money2(parts.ordinaryRate)}`);
+    if (parts.timeAndHalf) bits.push(`${formatHM(parts.timeAndHalf)} @ ${money2(parts.ot1Rate)}`);
+    if (parts.double) bits.push(`${formatHM(parts.double)} @ ${money2(parts.ot2Rate)}`);
+  } else {
+    if (parts.ordinary) bits.push(`${formatHours(parts.ordinary)} @ 1×`);
+    if (parts.timeAndHalf) bits.push(`${formatHours(parts.timeAndHalf)} @ 1.5×`);
+    if (parts.double) bits.push(`${formatHours(parts.double)} @ 2×`);
+  }
   return bits.join(" · ") || "—";
 }
 
 export function formatOtLabel(paid, dayType = "weekday") {
-  return formatSplit(shiftPay(paid, 0, 0, dayType));
+  const { ordinary, timeAndHalf, double } = shiftPay(paid, 0, 0, dayType);
+  return formatSplit({ ordinary, timeAndHalf, double });
+}
+
+/** "05:00" -> "5:00". */
+export function formatClock(t) {
+  if (!t) return "";
+  const [h, m] = String(t).split(":");
+  return `${Number(h)}:${m}`;
+}
+
+/** Compact hours: 9.5 -> "9h30", 9 -> "9h", 0.5 -> "30m". */
+export function formatHM(n) {
+  const { h, m } = splitHours(n);
+  if (!h && !m) return "0h";
+  if (!m) return `${h}h`;
+  if (!h) return `${m}m`;
+  return `${h}h${String(m).padStart(2, "0")}`;
+}
+
+/** "5:00–14:30 · 9h30 on site · 9h paid", or "11h45 on site · 11h15 paid" without clock times. */
+export function formatShiftTimes(shift, paid) {
+  const onSite = Number(shift.workedHours) || 0;
+  const bits = [];
+  if (shift.start && shift.end) bits.push(`${formatClock(shift.start)}–${formatClock(shift.end)}`);
+  bits.push(`${formatHM(onSite)} on site`);
+  bits.push(`${formatHM(paid ?? shift.paidHours)} paid`);
+  return bits.join(" · ");
 }
 
 export function inRange(iso, start, end) {

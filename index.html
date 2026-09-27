@@ -15,7 +15,7 @@
       href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="css/app.css" />
+    <link rel="stylesheet" href="css/app.css?v=2" />
   </head>
   <body>
     <div class="glow glow-a" aria-hidden="true"></div>
@@ -86,7 +86,7 @@
               <button class="pill" type="button" data-day-type="sunday" aria-pressed="false">Sunday</button>
             </div>
             <p class="helper" id="shift-helper">
-              Sat OT: first 2 hours 1.5×, then 2×. Standalone Sat min 4h = 2 @ 1.5× + 2 @ 2×. Sunday: all hours 2×, min 4h. Do not use weekday 8/10 OT on Sat or Sun.
+              Sat OT: first 2 hours 1.5×, then 2×. Standalone Sat min 4h = 2 @ 1.5× + 2 @ 2×. Sunday: all hours 2×, min 4h. Weekday OT bands (7.6h, then OT1, then OT2) never apply on Sat or Sun.
             </p>
           </div>
           <div class="full">
@@ -124,13 +124,46 @@
             <input id="shift-break" type="number" min="0" max="240" step="5" value="30" />
           </label>
           <label class="field">
-            Hourly rate
-            <input id="shift-rate" type="number" min="0" step="0.01" />
+            Ordinary rate ($/h)
+            <input id="shift-rate" type="number" min="0" step="any" inputmode="decimal" />
+          </label>
+          <details class="more full" id="shift-rules">
+            <summary>Overtime rules: <span id="shift-rules-summary"></span></summary>
+            <div class="form-grid" style="margin-top: 12px">
+              <label class="field">
+                Ordinary hours / day
+                <input id="shift-ord-hours" type="number" min="0" max="24" step="any" inputmode="decimal" />
+              </label>
+              <label class="field">
+                OT1 hours
+                <input id="shift-ot1-hours" type="number" min="0" max="24" step="any" inputmode="decimal" />
+              </label>
+              <label class="field">
+                OT1 rate ($/h)
+                <input id="shift-ot1-rate" type="number" min="0" step="any" inputmode="decimal" />
+              </label>
+              <label class="field">
+                OT2 rate ($/h)
+                <input id="shift-ot2-rate" type="number" min="0" step="any" inputmode="decimal" />
+              </label>
+              <label class="field">
+                Meal allowance ($)
+                <input id="shift-meal-rate" type="number" min="0" step="any" inputmode="decimal" />
+              </label>
+              <p class="helper full">Weekday only. Saturday and Sunday still use 1.5× / 2× of the ordinary rate.</p>
+            </div>
+          </details>
+          <label class="check full" for="shift-meal">
+            <input id="shift-meal" type="checkbox" />
+            <span>
+              <b id="shift-meal-label">Meal allowance $21.15</b>
+              <small>Tax-free. Never added to gross. Ticked automatically when paid hours go over the ordinary day.</small>
+            </span>
           </label>
           <div class="preview">
             <div>
-              <small>Worked</small>
-              <div class="preview-value" id="shift-worked">0h</div>
+              <small>On site</small>
+              <div class="preview-value" id="shift-onsite">0h</div>
             </div>
             <div>
               <small>Paid hours</small>
@@ -140,7 +173,8 @@
               <small>Est. gross</small>
               <div class="preview-value" id="shift-gross">$0.00</div>
             </div>
-            <p class="preview-note" id="shift-ot-note">1.0× / 1.5× / 2× split</p>
+            <p class="preview-note" id="shift-ot-note">Ordinary / OT1 / OT2 split</p>
+            <p class="preview-note meal-note" id="shift-meal-preview">No meal allowance</p>
           </div>
           <p class="helper full">Hours calc is an estimate only. Payslips are the source of truth for take-home.</p>
           <details class="more full">
@@ -268,8 +302,28 @@
             <input id="job-name" type="text" required placeholder="Job 1" />
           </label>
           <label class="field">
-            Hourly rate
-            <input id="job-rate" type="number" min="0" step="0.01" required />
+            Ordinary rate ($/h)
+            <input id="job-rate" type="number" min="0" step="any" inputmode="decimal" required />
+          </label>
+          <label class="field">
+            Ordinary hours / day
+            <input id="job-ord-hours" type="number" min="0" max="24" step="any" inputmode="decimal" required />
+          </label>
+          <label class="field">
+            OT1 rate ($/h)
+            <input id="job-ot1-rate" type="number" min="0" step="any" inputmode="decimal" required />
+          </label>
+          <label class="field">
+            OT1 hours
+            <input id="job-ot1-hours" type="number" min="0" max="24" step="any" inputmode="decimal" required />
+          </label>
+          <label class="field">
+            OT2 rate ($/h)
+            <input id="job-ot2-rate" type="number" min="0" step="any" inputmode="decimal" required />
+          </label>
+          <label class="field">
+            Meal allowance ($, tax-free)
+            <input id="job-meal" type="number" min="0" step="any" inputmode="decimal" />
           </label>
           <label class="field">
             Default unpaid break (min)
@@ -279,7 +333,14 @@
             Colour
             <input id="job-color" type="color" value="#e2a336" />
           </label>
-          <p class="muted full">Weekday: 1.5× after 8 paid hours, 2× after 10. Saturday and Sunday use their own rates — never the weekday 8/10 bands.</p>
+          <p class="muted full">Weekday: ordinary rate for the ordinary hours, then the OT1 rate for the OT1 hours, then the OT2 rate. These are fixed dollar rates (the ordinary rate already includes casual loading). Saturday and Sunday keep their own 1.5× / 2× rules — never the weekday bands.</p>
+          <label class="check full" id="job-apply-wrap" for="job-apply">
+            <input id="job-apply" type="checkbox" />
+            <span>
+              <b>Apply these rates to this job’s existing shifts</b>
+              <small>Otherwise existing shifts keep the rates they were logged with. Meal ticks are kept.</small>
+            </span>
+          </label>
         </div>
         <div class="dlg-actions">
           <button class="btn danger" type="button" id="job-delete" hidden>Delete</button>
@@ -325,8 +386,29 @@
       </form>
     </dialog>
 
+    <dialog id="dlg-drive" aria-labelledby="drive-title">
+      <div class="dlg">
+        <header>
+          <div>
+            <p class="eyebrow">Private copy</p>
+            <h2 id="drive-title">Save to Google Drive</h2>
+          </div>
+          <button class="btn ghost" type="button" data-close>Close</button>
+        </header>
+        <p class="muted">Saves a private copy to your Drive. Nothing is uploaded to the website.</p>
+        <ul class="drive-files" id="drive-files"></ul>
+        <p class="drive-status" id="drive-status" role="status"></p>
+        <div class="dlg-actions">
+          <div class="right">
+            <button class="btn primary" type="button" id="drive-retry" hidden>Share now</button>
+            <button class="btn" type="button" data-close>Done</button>
+          </div>
+        </div>
+      </div>
+    </dialog>
+
     <div class="toast" id="toast" hidden role="status"></div>
 
-    <script type="module" src="js/app.js"></script>
+    <script type="module" src="js/app.js?v=2"></script>
   </body>
 </html>
