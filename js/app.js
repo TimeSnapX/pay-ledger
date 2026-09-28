@@ -1774,3 +1774,12 @@ reload()
   console.error(err);
   toast("Could not open local storage. Try a normal Chrome/Edge window, not file://.");
 });
+
+// Installable app (Chrome "Install" -> WebAPK) + offline open. The service
+// worker only handles this site's own files; Google sign-in / Drive requests
+// are never intercepted. See sw.js.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js", { scope: "./" }).catch((err) => console.warn("Service worker not registered", err));
+  });
+}

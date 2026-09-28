@@ -2,10 +2,11 @@
 // Root cause of the Sep 2026 bug: js/app.js was read as Windows-1252 and re-saved as UTF-8 (with BOM), turning "·" into two characters..
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = path.dirname(new URL(import.meta.url).pathname);
+const root = path.dirname(fileURLToPath(import.meta.url));
 const skip = new Set([".git", "node_modules", "test-results"]);
-const exts = new Set([".html", ".js", ".mjs", ".css", ".json", ".md", ".svg", ".ps1"]);
+const exts = new Set([".html", ".js", ".mjs", ".css", ".json", ".md", ".svg", ".ps1", ".webmanifest"]);
 const bad = /\u00C2|\u00E2\u20AC|\u00E2\u02C6|\u00C3\u2014|\u00C3\u00A9|\uFFFD/;
 const problems = [];
 let checked = 0;
