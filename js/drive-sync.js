@@ -11,7 +11,14 @@
  *   pay-ledger-backup-YYYY-Www.json  one dated copy per ISO week (created once)
  *
  * State lives in the meta store (device only, never in backups):
- *   driveSync  { connected, folderId, files: {csv,json,html}, weekly, lastSyncedAt, email }
+ *   driveSync  { connected, folderId, files: {csv,json,html}, weekly, lastSyncedAt, email, remoteSeenAt }
+ *
+ * Safety guard: before every upload the Drive backup's metadata is checked.
+ * If this device has FEWER shifts/payslips than Drive's backup (e.g. the
+ * phone's storage was wiped), or Drive's backup was changed elsewhere since
+ * this device last saved it, nothing is uploaded: status "conflict" offers
+ * "Restore from Drive" or an explicit "Overwrite Drive". Counts are kept on
+ * the Drive file as appProperties (shifts, payslips).
  *   driveDirty { dirty, rev, since }   unsynced changes survive a reload
  *   driveToken { value, expiresAt }    short-lived (~1h) access token
  */
@@ -57,6 +64,26 @@ export function weeklyBackupName(date = new Date()) {
   return `pay-ledger-backup-${isoWeekKey(date)}.json`;
 }
 
+/** "14 Oct, 1:45 pm" in Brisbane time (the user's zone), whatever the device zone. */
+export function formatBrisbane(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-AU", {
+      timeZone: "Australia/Brisbane",
+      day: "numeric",
+      month: "short",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+  return `${parts.day} ${parts.month}, ${parts.hour}:${parts.minute} ${String(parts.dayPeriod || "").toLowerCase()}`.trim();
+}
+
 /** "11:58am" today, "Sat 11:58am" this week, "20 Sep 11:58am" otherwise. */
 export function formatSavedTime(iso, now = new Date()) {
   if (!iso) return "";
@@ -85,6 +112,7 @@ export function createDriveSync(opts) {
     getMeta,
     setMeta,
     buildFiles,
+    localCounts = null,
     onChange = () => {},
     win = globalThis,
     debounceMs = 5000,
@@ -109,6 +137,8 @@ export function createDriveSync(opts) {
   let again = false;
   let needsTap = false;
   let started = false;
+  let conflict = null; // { reason: "empty" | "fewer" | "newer", remote, local }
+  let allowOverwrite = false;
 
   function snapshot() {
     return {
@@ -124,6 +154,14 @@ export function createDriveSync(opts) {
       files: { ...sync.files },
       weekly: sync.weekly,
       needsTap,
+      conflict: conflict
+        ? {
+            reason: conflict.reason,
+            remoteModifiedTime: conflict.remote.modifiedTime || null,
+            remoteCounts: conflict.remote.counts ? { ...conflict.remote.counts } : null,
+            localCounts: { ...conflict.local },
+          }
+        : null,
     };
   }
 
@@ -296,6 +334,94 @@ export function createDriveSync(opts) {
     return sync.folderId;
   }
 
+  /* ---------- Safety guard: what is on Drive right now ---------- */
+
+  async function fileMeta(id) {
+    const res = await authed(`${API}/${encodeURIComponent(id)}?fields=id,modifiedTime,size,trashed,appProperties`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw await httpError(res);
+    const m = await res.json();
+    return m && !m.trashed ? m : null;
+  }
+
+  /** The app's backup JSON on Drive (never creates anything): { id, folderId, modifiedTime, size, counts|null } or null. */
+  async function findRemote() {
+    let folderId = sync.folderId;
+    if (folderId && !(await fileMeta(folderId))) folderId = "";
+    if (!folderId) {
+      folderId = await findOne(`name='${q(FOLDER_NAME)}' and mimeType='${FOLDER_MIME}' and 'root' in parents and trashed=false`);
+    }
+    if (!folderId) return null;
+    let m = null;
+    if (folderId === sync.folderId && sync.files.json) m = await fileMeta(sync.files.json);
+    if (!m) {
+      const id = await findOne(`name='${q(DRIVE_FILES[1].name)}' and '${q(folderId)}' in parents and trashed=false`);
+      if (id) m = await fileMeta(id);
+    }
+    if (!m) return null;
+    const ap = m.appProperties || {};
+    const counts =
+      ap.shifts != null && ap.payslips != null ? { shifts: Number(ap.shifts) || 0, payslips: Number(ap.payslips) || 0 } : null;
+    return { id: m.id, folderId, modifiedTime: m.modifiedTime || null, size: Number(m.size) || 0, counts };
+  }
+
+  async function downloadText(id) {
+    const res = await authed(`${API}/${encodeURIComponent(id)}?alt=media`);
+    if (!res.ok) throw await httpError(res);
+    return res.text();
+  }
+
+  function countBackup(text) {
+    const j = JSON.parse(text);
+    return { shifts: (j.shifts || []).length, payslips: (j.payslips || []).length };
+  }
+
+  async function countLocal(content) {
+    if (localCounts) return localCounts();
+    return countBackup(content.json);
+  }
+
+  /** Returns a conflict object when uploading would lose data on Drive, else null. */
+  async function checkGuard(local) {
+    const remote = await findRemote();
+    if (!remote) return null;
+    if (!remote.counts) {
+      try {
+        remote.counts = countBackup(await downloadText(remote.id));
+      } catch (err) {
+        if (err instanceof NeedsAuth || err instanceof Offline) throw err;
+        remote.counts = null; // unreadable: treat as "has data"
+      }
+    }
+    const localTotal = local.shifts + local.payslips;
+    const rc = remote.counts;
+    const remoteHasData = !rc || rc.shifts + rc.payslips > 0;
+    let reason = "";
+    if (localTotal === 0 && remoteHasData) reason = "empty";
+    else if (rc && (local.shifts < rc.shifts || local.payslips < rc.payslips)) reason = "fewer";
+    else if (!rc && localTotal === 0) reason = "empty";
+    else if (
+      sync.remoteSeenAt &&
+      remote.modifiedTime &&
+      Date.parse(remote.modifiedTime) > Date.parse(sync.remoteSeenAt) + 2000
+    ) reason = "newer";
+    return reason ? { reason, remote, local } : null;
+  }
+
+  /** After a successful save: record counts on the backup file and remember its modifiedTime. */
+  async function stampRemote(local) {
+    const id = sync.files.json;
+    if (!id) return;
+    const res = await authed(`${API}/${encodeURIComponent(id)}?fields=id,modifiedTime`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json; charset=UTF-8" },
+      body: JSON.stringify({ appProperties: { shifts: String(local.shifts), payslips: String(local.payslips) } }),
+    });
+    if (!res.ok) throw await httpError(res);
+    const j = await res.json().catch(() => ({}));
+    sync.remoteSeenAt = j.modifiedTime || now().toISOString();
+  }
+
   /** POST (create, multipart) or PATCH (update, media). Big bodies go resumable. */
   async function upload(id, spec, body, parent) {
     const blob = new Blob([body], { type: spec.mimeType });
@@ -451,11 +577,26 @@ export function createDriveSync(opts) {
     set("saving");
     try {
       const content = await buildFiles();
+      const local = await countLocal(content);
+      if (!allowOverwrite) {
+        const c = await checkGuard(local);
+        if (c) {
+          conflict = c; // keep dirty: nothing is uploaded until the user chooses
+          set("conflict");
+          return;
+        }
+      }
+      allowOverwrite = false;
+      conflict = null;
       const ctx = { folderId: await ensureFolder(false), verified: false };
       for (const spec of DRIVE_FILES) await putFile(spec, content[spec.key], ctx);
       await putWeekly(content.json, ctx).catch((err) => {
         if (err instanceof NeedsAuth || err instanceof Offline) throw err;
         console.warn("weekly Drive copy skipped", err);
+      });
+      await stampRemote(local).catch((err) => {
+        if (err instanceof NeedsAuth || err instanceof Offline) throw err;
+        console.warn("Drive backup counts not recorded", err);
       });
       sync.lastSyncedAt = now().toISOString();
       retryCount = 0;
@@ -486,6 +627,7 @@ export function createDriveSync(opts) {
     if (!clientId || inApp || !sync.connected) return;
     dirty = { dirty: true, rev: dirty.rev + 1, since: dirty.since || now().toISOString() };
     await saveDirty();
+    if (conflict) return set("conflict"); // paused until the user chooses Restore or Overwrite
     if (!needsTap && status !== "offline") set("pending");
     else set(status, detail);
     if (!needsTap) schedule(debounceMs);
@@ -525,7 +667,18 @@ export function createDriveSync(opts) {
     if (t?.value && t.expiresAt > Date.now()) token = t;
     if (!sync.connected) return set("off");
     loadGis().catch(() => {}); // preload so a tap can open the Google popup straight away
-    if (dirty.dirty) {
+    let localEmpty = false;
+    try {
+      const c = localCounts ? await localCounts() : null;
+      localEmpty = Boolean(c && c.shifts + c.payslips === 0);
+    } catch {}
+    if (localEmpty) {
+      // Ledger empty on open: look at Drive straight away so a restore can be offered.
+      dirty = { dirty: true, rev: dirty.rev + 1, since: dirty.since || now().toISOString() };
+      await saveDirty();
+      set("pending");
+      runSync();
+    } else if (dirty.dirty) {
       set("pending");
       runSync(); // sync on app open when there are unsynced changes
     } else set("saved");
@@ -576,6 +729,8 @@ export function createDriveSync(opts) {
     needsTap = false;
     // Keep folder / file IDs so reconnecting later updates the same files.
     sync = { ...sync, connected: false, lastSyncedAt: null };
+    conflict = null;
+    allowOverwrite = false;
     dirty = { dirty: false, rev: dirty.rev, since: null };
     await Promise.all([saveSync(), saveDirty(), saveToken()]);
     set("off");
@@ -592,12 +747,59 @@ export function createDriveSync(opts) {
     return runSync();
   }
 
-  return { init, connect, reconnect, disconnect, syncNow, markDirty, snapshot, _flush: () => running };
+  /** Download Drive's backup JSON text (for "Restore from Drive"). Never writes to Drive. */
+  async function fetchRemoteBackup() {
+    if (!sync.connected) throw new Error("Connect Google Drive first.");
+    if (needsTap) throw new Error("Tap to reconnect first.");
+    const remote = conflict?.remote || (await findRemote());
+    if (!remote) throw new Error("No Pay Ledger backup found in your Drive.");
+    const text = await downloadText(remote.id);
+    return { text, remote: { ...remote } };
+  }
+
+  /** After the Drive backup was imported here: adopt its IDs so the next save updates it in place. */
+  async function afterRestore(remote) {
+    if (remote) {
+      sync.folderId = remote.folderId || sync.folderId;
+      sync.files = { ...sync.files, json: remote.id };
+      sync.remoteSeenAt = remote.modifiedTime || sync.remoteSeenAt || null;
+    }
+    conflict = null;
+    allowOverwrite = false;
+    await saveSync();
+    set(dirty.dirty ? "pending" : "saved");
+    if (dirty.dirty && !needsTap) schedule(debounceMs);
+  }
+
+  /** Explicit, confirmed choice: replace Drive's backup with this device's ledger once. */
+  async function overwriteDrive() {
+    if (!sync.connected) return;
+    allowOverwrite = true;
+    conflict = null;
+    dirty = { dirty: true, rev: dirty.rev + 1, since: dirty.since || now().toISOString() };
+    await saveDirty();
+    retryCount = 0;
+    return runSync();
+  }
+
+  return {
+    init,
+    connect,
+    reconnect,
+    disconnect,
+    syncNow,
+    markDirty,
+    snapshot,
+    fetchRemoteBackup,
+    afterRestore,
+    overwriteDrive,
+    _flush: () => running,
+  };
 }
 
 /** Status line text for the UI. */
 export function describeDriveStatus(s, { inAppName = "this app\u2019s browser", now = new Date() } = {}) {
-  const last = s.lastSyncedAt ? `Last saved to Drive ${formatSavedTime(s.lastSyncedAt, now)}` : "";
+  const last = s.lastSyncedAt ? `Last synced to Drive: ${formatBrisbane(s.lastSyncedAt)}` : "";
   switch (s.status) {
     case "unconfigured":
       return "Auto-save to Drive isn\u2019t set up yet. Use Save to Google Drive for now.";
@@ -617,6 +819,18 @@ export function describeDriveStatus(s, { inAppName = "this app\u2019s browser", 
       return "Offline, will retry";
     case "reconnect":
       return "Sign in again to keep saving. Your changes are safe on this phone.";
+    case "conflict": {
+      const c = s.conflict || {};
+      const rc = c.remoteCounts;
+      const when = c.remoteModifiedTime ? `, last saved ${formatBrisbane(c.remoteModifiedTime)}` : "";
+      const has = rc ? `${rc.shifts} shift${rc.shifts === 1 ? "" : "s"}, ${rc.payslips} payslip${rc.payslips === 1 ? "" : "s"}` : "your ledger";
+      if (c.reason === "empty") return `Found your Drive backup (${has}${when}). This phone\u2019s ledger is empty, so auto-save is paused.`;
+      if (c.reason === "fewer") {
+        const lc = c.localCounts || { shifts: 0, payslips: 0 };
+        return `Drive\u2019s backup has more (${has}${when}) than this phone (${lc.shifts} shift${lc.shifts === 1 ? "" : "s"}, ${lc.payslips} payslip${lc.payslips === 1 ? "" : "s"}). Auto-save is paused so nothing is lost.`;
+      }
+      return `Drive\u2019s backup was changed on another device${when}. Auto-save is paused so nothing is lost.`;
+    }
     case "error":
       return `Couldn\u2019t save to Drive (${s.detail || "error"}). Will retry.`;
     default:

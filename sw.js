@@ -10,7 +10,7 @@
  * - Never touches IndexedDB (your ledger data lives there).
  * Bump VERSION to drop old caches.
  */
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `pay-ledger-${VERSION}`;
 const SCOPE = new URL(self.registration.scope);
 
@@ -26,16 +26,17 @@ const SHELL = [
   "icons/icon-512.png",
   "icons/icon-maskable-512.png",
   "icons/apple-touch-icon.png",
-  "css/app.css?v=4",
-  "js/app.js?v=4",
-  "js/db.js?v=4",
-  "js/money.js?v=4",
-  "js/migrate.js?v=4",
-  "js/exporters.js?v=4",
-  "js/share.js?v=4",
-  "js/transfer.js?v=4",
-  "js/drive-config.js?v=4",
-  "js/drive-sync.js?v=4",
+  "css/app.css?v=5",
+  "js/app.js?v=5",
+  "js/db.js?v=5",
+  "js/money.js?v=5",
+  "js/migrate.js?v=5",
+  "js/exporters.js?v=5",
+  "js/share.js?v=5",
+  "js/transfer.js?v=5",
+  "js/drive-config.js?v=5",
+  "js/drive-sync.js?v=5",
+  "js/safety.js?v=5",
 ];
 
 const NEVER = /(^|\.)google\.com$|(^|\.)googleapis\.com$|(^|\.)gstatic\.com$|(^|\.)googleusercontent\.com$/;

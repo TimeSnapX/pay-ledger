@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { GIS_MOCK, installFakeDrive } from "./drive-mock.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const req = createRequire(path.join(process.env.PLAYWRIGHT_DIR || here, "package.json"));
@@ -22,7 +23,7 @@ const BASE = process.env.BASE || "http://127.0.0.1:4174";
 const APP = `${BASE}/pay-ledger/`;
 const SHOTS = process.env.SHOTS || "/tmp/shots";
 await mkdir(SHOTS, { recursive: true });
-const V = "?v=4";
+const V = "?v=5";
 const TEST_CLIENT_ID = "1234567890-test.apps.googleusercontent.com";
 const GIS_SRC = "https://accounts.google.com/gsi/client";
 
@@ -40,107 +41,6 @@ const check = (cond, msg) => {
 const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME || "/usr/bin/google-chrome" });
 
 /* ---------- mocks ---------- */
-
-// Stand-in for https://accounts.google.com/gsi/client (served for that URL).
-const GIS_MOCK = `
-(() => {
-  const G = (window.__gis = window.__gis || { mode: "ok", requests: [], tokenN: 0, revoked: [], inits: [] });
-  window.google = { accounts: { oauth2: {
-    initTokenClient(cfg) {
-      G.inits.push({ client_id: cfg.client_id, scope: cfg.scope });
-      return { requestAccessToken(o = {}) {
-        G.requests.push({ ...o, hasPrompt: "prompt" in o });
-        setTimeout(() => {
-          if (G.mode === "blockSilent" && o.prompt === "") return cfg.error_callback({ type: "popup_failed_to_open" });
-          if (G.mode === "closed") return cfg.error_callback({ type: "popup_closed" });
-          cfg.callback({ access_token: "tok-" + (++G.tokenN), expires_in: 3599, scope: cfg.scope, token_type: "Bearer" });
-        }, 30);
-      } };
-    },
-    hasGrantedAllScopes(r, s) { return String(r.scope || "").split(" ").includes(s); },
-    revoke(t, cb) { G.revoked.push(t); cb && cb(); },
-  } } };
-})();`;
-
-// In-page fake of the Drive v3 API, installed as a fetch wrapper for googleapis.com.
-function installFakeDrive() {
-  const D = (window.__drive = { files: {}, n: 0, log: [], fail: [], offline: false, expired: [] });
-  const realFetch = window.fetch.bind(window);
-  const reply = (status, body, headers = {}) =>
-    new Response(body == null ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
-  const newId = () => `id${++D.n}`;
-  const meta = (f) => ({ id: f.id, name: f.name, mimeType: f.mimeType, trashed: f.trashed });
-  const store = (fields) => { const f = { id: newId(), trashed: false, content: "", rev: 0, ...fields }; D.files[f.id] = f; return f; };
-  const qval = (qs, re) => { const m = re.exec(qs); return m ? m[1].replace(/\\'/g, "'").replace(/\\\\/g, "\\") : null; };
-  window.fetch = async (input, init = {}) => {
-    const url = typeof input === "string" ? input : input.url;
-    if (!url.startsWith("https://www.googleapis.com/")) return realFetch(input, init);
-    const method = String(init.method || "GET").toUpperCase();
-    const headers = init.headers || {};
-    const entry = { method, url, auth: headers.Authorization || "", ct: headers["Content-Type"] || "", at: Date.now() };
-    D.log.push(entry);
-    if (D.offline) { entry.status = "network"; throw new TypeError("Failed to fetch"); }
-    const done = (res) => { entry.status = res.status; return res; };
-    if (D.expired.includes(entry.auth)) return done(reply(401, { error: { code: 401, message: "Invalid Credentials" } }));
-    const fi = D.fail.findIndex((x) => x.method === method && (!x.urlIncludes || url.includes(x.urlIncludes)));
-    if (fi >= 0) { const x = D.fail[fi]; if (--x.times <= 0) D.fail.splice(fi, 1); return done(reply(x.status, { error: { code: x.status, message: "mock " + x.status } })); }
-    const u = new URL(url);
-    const body = init.body == null ? "" : await new Response(init.body).text();
-    entry.size = body.length;
-    const p = u.pathname;
-    if (p === "/drive/v3/about") return done(reply(200, { user: { emailAddress: "tim@example.com" } }));
-    if (p === "/drive/v3/files" && method === "GET") {
-      const qs = u.searchParams.get("q") || "";
-      const name = qval(qs, /name='((?:[^'\\]|\\.)*)'/);
-      const mime = qval(qs, /mimeType='([^']*)'/);
-      const parent = qval(qs, /'((?:[^'\\]|\\.)*)' in parents/);
-      const hit = Object.values(D.files).filter((f) => !f.trashed && (!name || f.name === name) && (!mime || f.mimeType === mime) && (!parent || f.parents.includes(parent)));
-      entry.search = { name, parent };
-      return done(reply(200, { files: hit.slice(0, 1).map((f) => ({ id: f.id, name: f.name })) }));
-    }
-    if (p === "/drive/v3/files" && method === "POST") {
-      const m = JSON.parse(body);
-      const f = store({ name: m.name, mimeType: m.mimeType, parents: m.parents || [] });
-      entry.created = f.id;
-      return done(reply(200, { id: f.id }));
-    }
-    let m = /^\/drive\/v3\/files\/([^/]+)$/.exec(p);
-    if (m && method === "GET") { const f = D.files[m[1]]; return done(f ? reply(200, meta(f)) : reply(404, { error: { code: 404, message: "File not found" } })); }
-    if (p === "/upload/drive/v3/files" && method === "POST") {
-      const type = u.searchParams.get("uploadType");
-      entry.uploadType = type;
-      if (type === "multipart") {
-        const b = /boundary=([^;]+)/.exec(entry.ct)[1];
-        const parts = body.split(`--${b}`).slice(1, -1).map((part) => { const i = part.indexOf("\r\n\r\n"); return { head: part.slice(0, i), data: part.slice(i + 4, -2) }; });
-        const md = JSON.parse(parts[0].data);
-        const parentOk = (md.parents || []).every((pid) => pid === "root" || (D.files[pid] && !D.files[pid].trashed));
-        if (!parentOk) return done(reply(404, { error: { code: 404, message: "File not found: parent" } }));
-        const f = store({ name: md.name, mimeType: md.mimeType, parents: md.parents || [], content: parts[1].data, partType: /Content-Type: ([^\r\n]+)/.exec(parts[1].head)[1] });
-        entry.created = f.id;
-        return done(reply(200, meta(f)));
-      }
-      if (type === "resumable") {
-        const md = JSON.parse(body || "{}");
-        const f = store({ name: md.name, mimeType: md.mimeType, parents: md.parents || [], pending: true });
-        entry.created = f.id;
-        return done(reply(200, {}, { Location: `https://www.googleapis.com/upload/session/${f.id}` }));
-      }
-    }
-    m = /^\/upload\/drive\/v3\/files\/([^/]+)$/.exec(p);
-    if (m && method === "PATCH") {
-      const f = D.files[m[1]];
-      entry.uploadType = u.searchParams.get("uploadType");
-      entry.target = m[1];
-      if (!f) return done(reply(404, { error: { code: 404, message: "File not found: " + m[1] } }));
-      if (entry.uploadType === "resumable") return done(reply(200, {}, { Location: `https://www.googleapis.com/upload/session/${f.id}` }));
-      f.content = body; f.rev += 1; f.lastType = entry.ct;
-      return done(reply(200, meta(f)));
-    }
-    m = /^\/upload\/session\/([^/]+)$/.exec(p);
-    if (m && method === "PUT") { const f = D.files[m[1]]; f.content = body; f.rev += 1; delete f.pending; entry.target = f.id; return done(reply(200, meta(f))); }
-    return done(reply(400, { error: { code: 400, message: "mock: unhandled " + method + " " + p } }));
-  };
-}
 
 async function newPage({ ua = CHROME_UA, configured = true } = {}) {
   const ctx = await browser.newContext({
@@ -258,7 +158,7 @@ check((await driveState(page)).log.length === 0, "no Drive calls before connecti
 await noOverflow(page, "connect overview");
 await shot(page, "drive-3-connect.png");
 await page.click("#view-overview [data-drive-connect]");
-await waitStatus(page, /^Last saved to Drive \d{1,2}:\d{2}(am|pm)$/);
+await waitStatus(page, /^Last synced to Drive: \d{1,2} [A-Z][a-z]{2}, \d{1,2}:\d{2} (am|pm)$/);
 let st = await driveState(page);
 const gis = await page.evaluate(() => window.__gis);
 check(gisHits.length === 1 && gisHits[0] === GIS_SRC, `GIS loaded once from ${GIS_SRC}`);
@@ -313,15 +213,18 @@ check((await meta(page, "driveDirty")).dirty === true, "dirty flag set in meta")
 await shot(page, "drive-5-pending.png");
 await page.waitForTimeout(3000);
 check((await driveState(page)).log.length === mark, "nothing sent during the 5 s debounce");
-await waitStatus(page, /^Last saved to Drive/, 15000);
+await waitStatus(page, /^Last synced to Drive/, 15000);
 st = await driveState(page);
 const edits = st.log.slice(mark);
 const firstAt = edits[0]?.at || 0;
 log(`first request ${firstAt - tEdit} ms after the first edit; ${edits.length} requests: ${edits.map((e) => `${e.method} ${e.uploadType || ""}`).join(", ")}`);
 check(firstAt - tEdit >= 4500, "sync started ~5 s after the edits");
-check(edits.length === 3 && edits.every((e) => e.method === "PATCH" && e.uploadType === "media"), "exactly 3 PATCH ?uploadType=media (coalesced)");
-check(JSON.stringify(edits.map((e) => e.target).sort()) === JSON.stringify(Object.values(ids).sort()), "PATCHes hit the same file IDs");
-check(edits.find((e) => e.target === ids.csv).ct === "text/csv", "CSV update Content-Type text/csv");
+const ups = edits.filter((e) => e.uploadType);
+const guardCalls = edits.filter((e) => !e.uploadType);
+check(ups.length === 3 && ups.every((e) => e.method === "PATCH" && e.uploadType === "media"), "exactly 3 PATCH ?uploadType=media (coalesced)");
+check(guardCalls.every((e) => (e.method === "GET" && !e.url.includes("alt=media")) || (e.method === "PATCH" && e.metaPatch === ids.json)) && guardCalls.some((e) => e.metaPatch === ids.json), "guard: metadata-only GETs + counts stamped on the backup JSON");
+check(JSON.stringify(ups.map((e) => e.target).sort()) === JSON.stringify(Object.values(ids).sort()), "PATCHes hit the same file IDs");
+check(ups.find((e) => e.target === ids.csv).ct === "text/csv", "CSV update Content-Type text/csv");
 check(Object.values(st.files).length === 5, "still 5 items in Drive (no duplicates)");
 check(JSON.parse(st.files[ids.json].content).shifts.length === 8 && st.files[ids.csv].content.includes("2026-09-25"), "Drive copy has the new shifts");
 
@@ -331,11 +234,11 @@ mark = st.log.length;
 await page.evaluate(() => window.__drive.expired.push("Bearer tok-1"));
 await putShift(page, "after-401", "2026-09-28", 8);
 await waitStatus(page, /^Changes waiting/);
-await waitStatus(page, /^Last saved to Drive/, 15000);
+await waitStatus(page, /^Last synced to Drive/, 15000);
 st = await driveState(page);
 const g2 = await page.evaluate(() => window.__gis.requests);
 const r401 = st.log.slice(mark);
-check(r401[0].status === 401 && r401[1].auth === "Bearer tok-2" && r401[1].url === r401[0].url && r401[0].method === "PATCH" && r401[1].status === 200, "401 then the same PATCH retried with a new token");
+check(r401[0].status === 401 && r401[1].auth === "Bearer tok-2" && r401[1].url === r401[0].url && r401[1].status === 200, "401 then the same PATCH retried with a new token");
 check(g2.length === 2 && g2[1].prompt === "" && g2[1].login_hint === "tim@example.com", "silent request (prompt '') with login_hint");
 check(r401.filter((e) => e.status === 401).length === 1, "only one 401");
 
@@ -344,7 +247,7 @@ console.log("6. CSV deleted in Drive (404) + summary in the bin -> recreated in 
 mark = st.log.length;
 await page.evaluate(([c, h]) => { delete window.__drive.files[c]; window.__drive.files[h].trashed = true; }, [ids.csv, ids.html]);
 await putShift(page, "after-404", "2026-09-29", 8);
-await waitStatus(page, /^Last saved to Drive/, 20000);
+await waitStatus(page, /^Last synced to Drive/, 20000);
 st = await driveState(page);
 sync = await meta(page, "driveSync");
 const newCsv = byName(st.files, "pay-ledger-hours.csv");
@@ -367,7 +270,7 @@ await shot(page, "drive-6-offline.png");
 mark = (await driveState(page)).log.length;
 await page.evaluate(() => { window.__drive.offline = false; });
 await ctx.setOffline(false);
-await waitStatus(page, /^Last saved to Drive/, 15000);
+await waitStatus(page, /^Last synced to Drive/, 15000);
 st = await driveState(page);
 check(st.files[ids.csv].content.includes("2026-09-30"), "offline change uploaded after reconnecting");
 check((await meta(page, "driveDirty")).dirty === false, "dirty cleared after the retry");
@@ -381,8 +284,8 @@ const beforeReload = JSON.parse(JSON.stringify(await page.evaluate(() => window.
 await page.evaluate((files) => sessionStorage.setItem("fakeDrive", JSON.stringify(files)), beforeReload);
 await page.addInitScript(() => { const s = sessionStorage.getItem("fakeDrive"); if (s && window.__drive) { const f = JSON.parse(s); window.__drive.files = f; window.__drive.n = 1000; } });
 await page.reload({ waitUntil: "networkidle" });
-check((await meta(page, "driveDirty")).dirty === true || /Last saved/.test(await statusText(page)), "dirty flag survived the reload");
-await waitStatus(page, /^Last saved to Drive/, 15000);
+check((await meta(page, "driveDirty")).dirty === true || /Last synced/.test(await statusText(page)), "dirty flag survived the reload");
+await waitStatus(page, /^Last synced to Drive/, 15000);
 st = await driveState(page);
 check(st.files[ids.csv].content.includes("2026-10-01"), "unsynced change uploaded on app open (stored token reused)");
 check(st.log.every((e) => e.auth === "Bearer tok-2"), "no new sign-in needed after reload within the hour");
@@ -401,7 +304,7 @@ await page.waitForTimeout(6000);
 check(/^Sign in again/.test(await statusText(page)), "no repeated popups while waiting for a tap");
 await shot(page, "drive-7-reconnect.png");
 await page.click("#view-overview [data-drive-connect]");
-await waitStatus(page, /^Last saved to Drive/, 15000);
+await waitStatus(page, /^Last synced to Drive/, 15000);
 st = await driveState(page);
 check(st.files[ids.csv].content.includes("2026-10-03") && st.files[ids.csv].content.includes("2026-10-02"), "after the tap both pending changes are saved");
 await page.evaluate(() => { window.__gis.mode = "ok"; });
@@ -415,7 +318,7 @@ await page.evaluate(async (v) => {
   const id = await db.saveFile(new File([bytes], "big-payslip.pdf", { type: "application/pdf" }));
   await db.put("payslips", { id: "p-big", jobId: "job-bev", payDate: "2026-09-24", periodStart: "2026-09-14", periodEnd: "2026-09-20", net: 949.16, gross: 1065.86, tax: 159, super: 75.16, deductions: 0, notes: "", fileId: id, fileName: "big-payslip.pdf", createdAt: new Date().toISOString() });
 }, V);
-await waitStatus(page, /^Last saved to Drive/, 30000);
+await waitStatus(page, /^Last synced to Drive/, 30000);
 st = await driveState(page);
 const big = st.log.slice(mark);
 check(big.some((e) => e.method === "PATCH" && e.uploadType === "resumable" && e.target === ids.json) && big.some((e) => e.method === "PUT" && e.target === ids.json && e.size > 5 * 1024 * 1024), "JSON (>5 MB) sent via resumable PATCH + PUT to the same ID");
@@ -428,7 +331,12 @@ mark = st.log.length;
 const small = await page.evaluate(async (v) => { const db = await import(`/pay-ledger/js/db.js${v}`); const b = await db.exportBackup(); b.shifts = b.shifts.slice(0, 3); b.payslips = []; b.files = []; return b; }, V);
 check(!small.meta.some((r) => String(r.key).startsWith("drive")), "exportBackup leaves Drive state out");
 await page.evaluate(async ([b, v]) => (await import(`/pay-ledger/js/db.js${v}`)).importBackup(b, { keepCurrent: true }), [small, V]);
-await waitStatus(page, /^Last saved to Drive/, 20000);
+// Smaller ledger than Drive's backup: the guard pauses auto-save until an explicit Overwrite.
+await waitStatus(page, /Auto-save is paused/, 20000);
+check(JSON.parse((await driveState(page)).files[ids.json].content).shifts.length > 3, "guard: smaller ledger NOT uploaded over Drive's backup");
+await page.click("#view-overview [data-drive-overwrite]");
+await page.click("#dlg-confirm [value='ok']");
+await waitStatus(page, /^Last synced to Drive/, 20000);
 sync = await meta(page, "driveSync");
 check(sync.connected && sync.folderId === folderId && sync.files.csv === ids.csv, "import kept this browser's Drive connection + IDs");
 st = await driveState(page);

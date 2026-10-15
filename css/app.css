@@ -832,3 +832,16 @@ dialog.full .backup-text { min-height: 55vh; }
 .auto-save[data-status="error"] .auto-status { color: var(--amber-2); }
 .auto-save .helper { word-break: break-word; }
 .auto-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Safety net banner: empty-ledger warning, restore offers, 7-day backup prompt. */
+.safety-banner {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(226, 163, 54, 0.45);
+  background: rgba(226, 163, 54, 0.1);
+}
+.safety-banner[data-kind="warn"] { border-color: rgba(230, 90, 70, 0.6); background: rgba(230, 90, 70, 0.12); }
+.safety-banner p { margin: 0 0 8px; line-height: 1.45; }
+.safety-banner[hidden] { display: none; }
+.safety-actions { display: flex; flex-wrap: wrap; gap: 8px; }

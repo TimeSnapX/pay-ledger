@@ -1,6 +1,6 @@
-import { BEVCHAIN_RULES } from "./money.js?v=4";
-import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=4";
-export { shiftsToCsv } from "./exporters.js?v=4";
+import { BEVCHAIN_RULES } from "./money.js?v=5";
+import { SCHEMA_VERSION, migrateDataset } from "./migrate.js?v=5";
+export { shiftsToCsv } from "./exporters.js?v=5";
 
 const DB_NAME = "pay-ledger";
 /** IndexedDB version == data schema version. v2: pay rules + meal allowance. */

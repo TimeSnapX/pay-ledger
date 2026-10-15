@@ -1,4 +1,4 @@
-import * as db from "./db.js?v=4";
+import * as db from "./db.js?v=5";
 import {
   AUD_EXACT,
   BEVCHAIN_RULES,
@@ -33,13 +33,14 @@ import {
   todayISO,
   weekEnd,
   weekStart,
-} from "./money.js?v=4";
-import { withPay } from "./migrate.js?v=4";
-import { buildSummaryHtml } from "./exporters.js?v=4";
-import { downloadFile, pickShareableFiles, shareOrDownload } from "./share.js?v=4";
-import { copyText, detectInAppBrowser, inAppLabel, kb, parseBackupText, plural, readClipboard } from "./transfer.js?v=4";
-import { GOOGLE_CLIENT_ID } from "./drive-config.js?v=4";
-import { DRIVE_FILES, FOLDER_NAME, createDriveSync, describeDriveStatus } from "./drive-sync.js?v=4";
+} from "./money.js?v=5";
+import { withPay } from "./migrate.js?v=5";
+import { buildSummaryHtml } from "./exporters.js?v=5";
+import { downloadFile, pickShareableFiles, shareOrDownload } from "./share.js?v=5";
+import { copyText, detectInAppBrowser, inAppLabel, kb, parseBackupText, plural, readClipboard } from "./transfer.js?v=5";
+import { GOOGLE_CLIENT_ID } from "./drive-config.js?v=5";
+import { DRIVE_FILES, FOLDER_NAME, createDriveSync, describeDriveStatus, formatBrisbane } from "./drive-sync.js?v=5";
+import * as safety from "./safety.js?v=5";
 
 /** Messenger / Facebook / Instagram etc. open links in their own browser with its own storage. */
 const IAB = detectInAppBrowser();
@@ -189,6 +190,7 @@ async function reload() {
   state.shifts = shifts.map(enrichShift).sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
   state.payslips = payslips.sort((a, b) => b.payDate.localeCompare(a.payDate));
   render();
+  afterReload().catch((err) => console.warn("safety check failed", err));
   if (upgradeWasBlocked) {
     upgradeWasBlocked = false;
     toast("Ledger updated · all shifts and payslips kept");
@@ -463,6 +465,10 @@ function autoSaveInner(s) {
     buttons = "";
   } else if (!connected) {
     buttons = `<button class="btn primary" type="button" data-drive-connect ${s.status === "connecting" ? "disabled" : ""}>Connect Google Drive</button>`;
+  } else if (s.status === "conflict") {
+    const when = s.conflict?.remoteModifiedTime ? ` (last saved ${formatBrisbane(s.conflict.remoteModifiedTime)})` : "";
+    buttons = `<button class="btn primary" type="button" data-drive-restore>Restore from Drive${escapeHtml(when)}</button>
+      <button class="btn ghost" type="button" data-drive-overwrite>Overwrite Drive with this phone</button>`;
   } else if (s.status === "reconnect") {
     buttons = `<button class="btn primary" type="button" data-drive-connect>Tap to reconnect</button>
       <button class="btn ghost" type="button" data-drive-disconnect>Disconnect</button>`;
@@ -485,7 +491,10 @@ function autoSaveInner(s) {
 }
 
 function renderAutoSave(snap) {
+  const wasSaved = state.drive?.lastSyncedAt;
   state.drive = snap;
+  if (snap.lastSyncedAt && snap.lastSyncedAt !== wasSaved) safety.markBackedUp(snap.lastSyncedAt);
+  renderSafety();
   for (const el of document.querySelectorAll("[data-drive-auto]")) {
     el.dataset.status = snap.status;
     el.innerHTML = autoSaveInner(snap);
@@ -510,8 +519,147 @@ const drive = createDriveSync({
   getMeta: async (key) => (await db.get("meta", key))?.value ?? null,
   setMeta: (key, value) => db.put("meta", { key, value }),
   buildFiles: driveContents,
+  localCounts: async () => {
+    const c = await db.currentCounts();
+    return { shifts: c.shifts, payslips: c.payslips };
+  },
   onChange: renderAutoSave,
 });
+
+/* ---------- Restore from Drive / safety net ---------- */
+
+async function restoreFromDrive() {
+  toast("Downloading your Drive backup\u2026");
+  let got;
+  try {
+    got = await drive.fetchRemoteBackup();
+  } catch (err) {
+    toast(`Couldn\u2019t download the Drive backup: ${err.message}`);
+    return false;
+  }
+  let payload;
+  let prepared;
+  try {
+    payload = parseBackupText(got.text);
+    prepared = db.prepareImport(payload);
+  } catch (err) {
+    toast(`The Drive backup couldn\u2019t be read: ${err.message}`);
+    return false;
+  }
+  const done = await confirmAndImport(payload, prepared.counts);
+  if (done) await drive.afterRestore(got.remote);
+  return done;
+}
+
+async function overwriteDriveConfirmed() {
+  const c = drive.snapshot().conflict;
+  const rc = c?.remoteCounts;
+  const lc = c?.localCounts;
+  const ok = await confirmDelete(
+    "Overwrite your Drive backup?",
+    `Drive\u2019s backup${rc ? ` has ${plural(rc.shifts, "shift")} and ${plural(rc.payslips, "payslip")}` : ""}` +
+      `${c?.remoteModifiedTime ? ` (last saved ${formatBrisbane(c.remoteModifiedTime)})` : ""}. ` +
+      `It will be replaced with this phone\u2019s ledger${lc ? ` (${plural(lc.shifts, "shift")}, ${plural(lc.payslips, "payslip")})` : ""}. ` +
+      "The weekly dated backups in the folder are not touched.",
+    "Overwrite Drive",
+  );
+  if (ok) await drive.overwriteDrive();
+}
+
+async function restoreLocalCopy() {
+  const copy = await safety.readLocalCopy();
+  if (!copy) {
+    toast("No saved copy on this phone.");
+    return;
+  }
+  let payload;
+  let prepared;
+  try {
+    payload = JSON.parse(copy.text);
+    prepared = db.prepareImport(payload);
+  } catch (err) {
+    toast(`The saved copy couldn\u2019t be read: ${err.message}`);
+    return;
+  }
+  await confirmAndImport(payload, prepared.counts);
+}
+
+let safetyTimer = 0;
+const safetyState = { hasData: false, localCopy: null, lastKnown: null, persisted: null };
+
+async function afterReload() {
+  const counts = await db.currentCounts();
+  safetyState.hasData = counts.shifts + counts.payslips > 0;
+  if (safetyState.hasData) {
+    // Second copy of the latest backup (debounced; never written while the ledger is empty).
+    clearTimeout(safetyTimer);
+    safetyTimer = setTimeout(async () => {
+      try {
+        const payload = await db.exportBackup();
+        await safety.saveLocalCopy(JSON.stringify(payload), { shifts: payload.shifts.length, payslips: payload.payslips.length });
+      } catch (err) {
+        console.warn("safety copy failed", err);
+      }
+    }, 1500);
+    safetyState.localCopy = null;
+  } else {
+    safetyState.lastKnown = safety.lastKnown();
+    safetyState.localCopy = await safety.readLocalCopy();
+  }
+  renderSafety();
+}
+
+function renderSafety() {
+  const el = document.querySelector("#safety-banner");
+  if (!el) return;
+  const d = state.drive || drive.snapshot();
+  const driveUsable = d.configured && !d.inApp;
+  const when = d.conflict?.remoteModifiedTime ? ` (last saved ${formatBrisbane(d.conflict.remoteModifiedTime)})` : "";
+  const busy = ["connecting", "pending", "saving"].includes(d.status);
+  const driveBtn = !driveUsable
+    ? ""
+    : d.status === "conflict"
+      ? `<button class="btn primary" type="button" data-drive-restore>Restore from Drive${escapeHtml(when)}</button>`
+      : !d.connected || d.status === "reconnect"
+        ? `<button class="btn" type="button" data-drive-connect ${busy ? "disabled" : ""}>${d.status === "connecting" ? "Signing in\u2026" : "Sign in with Google to restore"}</button>`
+        : "";
+  const driveLine =
+    driveUsable && d.connected && (d.status === "conflict" || busy)
+      ? `<p class="safety-drive" data-safety-drive>${escapeHtml(d.status === "conflict" ? describeDriveStatus(d) : "Checking your Google Drive\u2026")}</p>`
+      : "";
+  let html = "";
+  let kind = "";
+  if (!safetyState.hasData) {
+    const copy = safetyState.localCopy;
+    const known = safetyState.lastKnown;
+    const copyCounts = copy?.counts;
+    if (copy && copyCounts && copyCounts.shifts + copyCounts.payslips > 0) {
+      kind = "warn";
+      html = `<p><b>Your ledger is empty.</b> A copy saved on this phone ${escapeHtml(formatBrisbane(copy.savedAt))} has ${plural(copyCounts.shifts, "shift")} and ${plural(copyCounts.payslips, "payslip")}.</p>
+        <div class="safety-actions"><button class="btn primary" type="button" data-restore-local>Restore saved copy</button>${driveBtn}</div>`;
+    } else if (known && known.shifts + known.payslips > 0) {
+      kind = "warn";
+      html = `<p><b>Your ledger is empty, but it had ${plural(known.shifts, "shift")} and ${plural(known.payslips, "payslip")} on ${escapeHtml(formatBrisbane(known.at))}.</b> Don\u2019t add anything yet: restore your backup first.</p>
+        ${driveBtn ? `<div class="safety-actions">${driveBtn}</div>` : ""}`;
+    } else if (driveUsable && (!d.connected || d.status === "reconnect" || d.status === "conflict" || busy)) {
+      kind = "info";
+      html = `<p><b>Used Pay Ledger before?</b> Sign in with Google to restore your Drive backup.</p>${driveLine}${driveBtn ? `<div class="safety-actions">${driveBtn}</div>` : ""}`;
+    }
+    if (html && driveLine && !html.includes("data-safety-drive")) html = html.replace("</p>", `</p>${driveLine}`);
+  } else {
+    const days = safety.backupPromptDue(d.lastSyncedAt);
+    if (days) {
+      kind = "info";
+      const drivePart =
+        driveUsable && !d.connected ? `<button class="btn" type="button" data-drive-connect>Turn on auto-save to Drive</button>` : "";
+      html = `<p><b>No backup in ${plural(days, "day")}.</b> Download a backup file (or turn on auto-save) so a phone reset can\u2019t lose your ledger.</p>
+        <div class="safety-actions"><button class="btn primary" type="button" data-backup-now>Download backup</button>${drivePart}<button class="btn ghost" type="button" data-backup-later>Later</button></div>`;
+    }
+  }
+  el.hidden = !html;
+  el.dataset.kind = kind;
+  el.innerHTML = html;
+}
 
 function transferButtons() {
   return `
@@ -1289,6 +1437,7 @@ async function copyBackup() {
   const payload = await db.exportBackup();
   const text = JSON.stringify(payload);
   state.copyText = text;
+  safety.markBackedUp();
   state.copyCounts = { shifts: payload.shifts.length, payslips: payload.payslips.length };
   document.querySelector("#copy-share").hidden = typeof navigator.share !== "function";
   await tryCopy();
@@ -1436,6 +1585,7 @@ async function undoImport() {
 
 async function exportJson() {
   const payload = await db.exportBackup();
+  safety.markBackedUp();
   downloadBlob(
     `pay-ledger-${todayISO()}.json`,
     new Blob([JSON.stringify(payload)], { type: "application/json" }),
@@ -1615,6 +1765,14 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("[data-drive-connect]")) drive.connect().catch((err) => console.warn(err));
   if (event.target.closest("[data-drive-disconnect]")) drive.disconnect().catch((err) => console.warn(err));
   if (event.target.closest("[data-drive-now]")) drive.syncNow().catch((err) => console.warn(err));
+  if (event.target.closest("[data-drive-restore]")) restoreFromDrive().catch((err) => toast(err.message));
+  if (event.target.closest("[data-drive-overwrite]")) overwriteDriveConfirmed().catch((err) => toast(err.message));
+  if (event.target.closest("[data-restore-local]")) restoreLocalCopy().catch((err) => toast(err.message));
+  if (event.target.closest("[data-backup-now]")) exportJson().then(renderSafety).catch((err) => toast(err.message));
+  if (event.target.closest("[data-backup-later]")) {
+    safety.snoozeBackupPrompt(1);
+    renderSafety();
+  }
 });
 
 for (const el of document.querySelectorAll("[data-page-url]")) el.textContent = pageUrl();
@@ -1765,6 +1923,10 @@ async function applyChronaSeed() {
   return added;
 }
 
+safety.requestPersist().then((ok) => {
+  safetyState.persisted = ok;
+  document.documentElement.dataset.persisted = String(ok);
+});
 drive.init().catch((err) => console.warn("Drive auto-save unavailable", err));
 
 reload()
